@@ -195,6 +195,103 @@
     }
     function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
+    // ---- LLM config (BYO OpenRouter key) ----
+    const LLM_KEY = 'wooble:llm';
+    function loadLlmCfg() {
+      try { return JSON.parse(localStorage.getItem(LLM_KEY)) || {}; }
+      catch (e) { return {}; }
+    }
+    function saveLlmCfg(c) { localStorage.setItem(LLM_KEY, JSON.stringify(c)); }
+    const DEFAULT_LLM_MODEL = 'anthropic/claude-haiku-4.5';
+    const CONVERT_PROMPT = [
+      "You convert crochet patterns from natural language into a strict DSL. Output ONLY the DSL — no commentary, no markdown fences, no preamble.",
+      "",
+      "DSL rules (one row per line):",
+      "  <row-or-range>: <instructions> (<total-stitches>)",
+      "",
+      "  - Row range: \"7-9: ...\" applies to rows 7, 8, and 9.",
+      "  - Allowed stitch tokens: sc, inc, dec, ch, sl st, MR, FO (case-insensitive).",
+      "  - Counts: prefix with a number, e.g. \"28 sc\" or \"28sc\".",
+      "  - Repeated groups: \"[6 sc, inc] x 4\" means do (6 sc + inc) four times.",
+      "  - Magic ring: use \"in MR\" suffix, e.g. \"6 sc in MR\".",
+      "  - The trailing \"(N)\" is the total stitch count for that row.",
+      "",
+      "Natural-language mapping:",
+      "  - \"Round N\" / \"Rnd N\" / \"R N\"  ->  \"N:\"",
+      "  - \"Rounds N-M\" / \"Rnds N-M\"   ->  \"N-M:\"",
+      "  - \"magic ring\" / \"magic loop\"  ->  \"in MR\"",
+      "  - \"increase\" / \"2 sc in next st\" / \"inc\"  ->  \"inc\"",
+      "  - \"decrease\" / \"sc2tog\" / \"invisible decrease\" / \"dec\"  ->  \"dec\"",
+      "  - \"fasten off\" / \"FO\"  ->  \"FO\"",
+      "  - \"single crochet\" / \"sc\"  ->  \"sc\"",
+      "  - If round numbers are listed separately from the instructions (e.g. a column of \"Rnd 1.\\nRnd 2.\" followed by the actual stitches below), align them in order.",
+      "",
+      "Examples:",
+      "",
+      "Input:",
+      "Round 1. 6 sc in magic loop (6)",
+      "Round 2. 6 inc (12)",
+      "Rounds 3-4. 12 sc (12)",
+      "Round 5. [sc, inc] x 6 (18)",
+      "",
+      "Output:",
+      "1: 6 sc in MR (6)",
+      "2: 6 inc (12)",
+      "3-4: 12 sc (12)",
+      "5: [sc, inc] x 6 (18)",
+      "",
+      "Input:",
+      "Rnd 1.",
+      "Rnd 2.",
+      "Rnds 3-5.",
+      "start 6 sc in a magic loop (6)",
+      "6 inc (12)",
+      "12 sc (12)",
+      "",
+      "Output:",
+      "1: 6 sc in MR (6)",
+      "2: 6 inc (12)",
+      "3-5: 12 sc (12)",
+      "",
+      "Pattern to convert:",
+      "",
+    ].join('\n');
+
+    async function llmConvert(rawText, key, model) {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + key,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': location.origin === 'null' ? 'https://crochet.local/' : location.origin,
+          'X-Title': 'Crochet tracker',
+        },
+        body: JSON.stringify({
+          model: model || DEFAULT_LLM_MODEL,
+          messages: [{ role: 'user', content: CONVERT_PROMPT + rawText }],
+          temperature: 0,
+          max_tokens: 4000,
+        }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        let detail = t;
+        try { detail = JSON.parse(t).error?.message || t; } catch (e) {}
+        throw new Error('OpenRouter ' + res.status + ': ' + (detail || res.statusText).slice(0, 240));
+      }
+      const data = await res.json();
+      let out = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+      out = out.trim();
+      // Strip ``` fences if the model included them despite the instruction
+      if (out.startsWith('```')) {
+        const lines = out.split('\n');
+        if (lines[lines.length - 1].startsWith('```')) lines.pop();
+        lines.shift();
+        out = lines.join('\n').trim();
+      }
+      return out;
+    }
+
     // ---- Sync config + tombstones ----
     function loadSyncCfg() {
       try { return JSON.parse(localStorage.getItem(KEYS.sync)) || {}; }
@@ -436,8 +533,13 @@
         navigate('#/p/' + id);
       }
 
+      const aiBtn = el('button', {
+        class: 'btn secondary',
+        onclick: () => aiConvertDialog(patternInput),
+      }, '🤖 Convert with AI');
       const actions = el('div', { class: 'row' },
         el('button', { class: 'btn secondary', onclick: () => navigate('#/') }, 'Cancel'),
+        aiBtn,
         el('div', { style: 'flex:1' }),
         el('button', { class: 'btn', onclick: create }, 'Parse & start')
       );
@@ -680,6 +782,105 @@
       );
       scrim.appendChild(drawer);
       document.body.appendChild(scrim);
+    }
+
+    // ---- AI conversion dialog ----
+    function aiConvertDialog(targetTextarea) {
+      const scrim = makeScrim();
+      const close = () => { try { document.body.removeChild(scrim); } catch (e) {} };
+      let llm = loadLlmCfg();
+
+      const raw = el('textarea', { placeholder: 'Paste the original pattern in any format. The AI will convert it to our DSL.' });
+      raw.style.minHeight = '180px';
+      const status = el('div', { class: 'muted', style: 'font-size:13px;min-height:1.2em' });
+
+      // Key section — show only if no key stored, plus an "Edit key" toggle
+      const keyInput = el('input', { type: 'password', placeholder: 'OpenRouter API key (sk-or-…)' });
+      const modelInput = el('input', { type: 'text', placeholder: 'Model (default: ' + DEFAULT_LLM_MODEL + ')' });
+      const keyRow = el('div', { class: 'stack' },
+        el('div', { class: 'muted', style: 'font-size:13px' }, 'OpenRouter key (stored locally, never sent anywhere except OpenRouter)'),
+        keyInput,
+        el('div', { class: 'muted', style: 'font-size:13px;margin-top:4px' }, 'Model (optional)'),
+        modelInput,
+      );
+      const editKeyBtn = el('button', { class: 'btn secondary', onclick: () => {
+        keyInput.value = llm.key || '';
+        modelInput.value = llm.model || '';
+        keyRow.style.display = '';
+        editKeyBtn.style.display = 'none';
+      } }, '🔑 Edit key');
+      const keyStatus = el('div', { class: 'muted', style: 'font-size:13px' });
+      function refreshKeyUI() {
+        llm = loadLlmCfg();
+        if (llm.key) {
+          keyRow.style.display = 'none';
+          editKeyBtn.style.display = '';
+          keyStatus.textContent = 'Key saved' + (llm.model ? ' · model: ' + llm.model : '') + '. Edit if needed.';
+        } else {
+          keyRow.style.display = '';
+          editKeyBtn.style.display = 'none';
+          keyStatus.textContent = 'No key yet. Paste your OpenRouter key — it stays in this browser.';
+        }
+      }
+      refreshKeyUI();
+
+      let busy = false;
+      const convertBtn = el('button', { class: 'btn' }, 'Convert');
+      async function go() {
+        if (busy) return;
+        // If key inputs are showing, persist their values
+        if (keyRow.style.display !== 'none') {
+          const k = keyInput.value.trim();
+          const m = modelInput.value.trim();
+          if (!k) { status.textContent = 'Enter your OpenRouter key first.'; return; }
+          saveLlmCfg({ key: k, model: m });
+          refreshKeyUI();
+        }
+        llm = loadLlmCfg();
+        const rawText = raw.value.trim();
+        if (!rawText) { status.textContent = 'Paste a pattern to convert.'; raw.focus(); return; }
+        busy = true;
+        convertBtn.disabled = true;
+        status.textContent = 'Converting…';
+        try {
+          const out = await llmConvert(rawText, llm.key, llm.model);
+          targetTextarea.value = out;
+          targetTextarea.dispatchEvent(new Event('input'));
+          close();
+        } catch (e) {
+          const msg = String(e.message || e);
+          status.textContent = msg;
+          if (/401|403|invalid|unauthorized/i.test(msg)) {
+            // Probably a bad key — show the input again
+            saveLlmCfg({ model: llm.model || '' });
+            refreshKeyUI();
+            keyInput.value = '';
+          }
+        } finally {
+          busy = false;
+          convertBtn.disabled = false;
+        }
+      }
+      convertBtn.onclick = go;
+
+      const drawer = el('div', { class: 'drawer', style: 'max-width: 640px' },
+        el('h3', null, '🤖 Convert with AI'),
+        el('div', { class: 'muted', style: 'font-size:13px' },
+          'Paste a pattern in any natural format and convert it to the tracker’s DSL via OpenRouter.'),
+        raw,
+        keyStatus,
+        editKeyBtn,
+        keyRow,
+        status,
+        el('div', { class: 'row' },
+          el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
+          el('div', { style: 'flex:1' }),
+          convertBtn,
+        ),
+      );
+      scrim.appendChild(drawer);
+      document.body.appendChild(scrim);
+      setTimeout(() => raw.focus(), 0);
     }
 
     // ---- View: sync settings ----
