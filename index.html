@@ -150,6 +150,8 @@
     const KEYS = {
       projects: 'wooble:projects',
       project: (id) => 'wooble:project:' + id,
+      tombstones: 'wooble:tombstones',
+      sync: 'wooble:sync',
     };
     function loadProjects() {
       try { return JSON.parse(localStorage.getItem(KEYS.projects)) || []; }
@@ -160,10 +162,31 @@
       try { return JSON.parse(localStorage.getItem(KEYS.project(id))); }
       catch (e) { return null; }
     }
-    function saveProject(p) { localStorage.setItem(KEYS.project(p.id), JSON.stringify(p)); }
+    function saveProject(p) {
+      p.updatedAt = Date.now();
+      localStorage.setItem(KEYS.project(p.id), JSON.stringify(p));
+      scheduleSync();
+    }
     function deleteProject(id) {
+      const proj = loadProject(id);
+      const idx = loadProjects().find(x => x.id === id);
+      if (proj || idx) {
+        const t = loadTombstones();
+        t.push({
+          id,
+          name: (proj && proj.name) || (idx && idx.name) || '(deleted)',
+          rawText: (proj && proj.rawText) || '',
+          cursor: (proj && proj.cursor) || C.initialState(),
+          createdAt: (idx && idx.createdAt) || Date.now(),
+          lastOpenedAt: (idx && idx.lastOpenedAt) || Date.now(),
+          updatedAt: Date.now(),
+          deletedAt: Date.now(),
+        });
+        saveTombstones(t);
+      }
       localStorage.removeItem(KEYS.project(id));
       saveProjects(loadProjects().filter(p => p.id !== id));
+      scheduleSync();
     }
     function touchProject(id) {
       const list = loadProjects();
@@ -171,6 +194,117 @@
       if (p) { p.lastOpenedAt = Date.now(); saveProjects(list); }
     }
     function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+    // ---- Sync config + tombstones ----
+    function loadSyncCfg() {
+      try { return JSON.parse(localStorage.getItem(KEYS.sync)) || {}; }
+      catch (e) { return {}; }
+    }
+    function saveSyncCfg(c) { localStorage.setItem(KEYS.sync, JSON.stringify(c)); }
+    function loadTombstones() {
+      try { return JSON.parse(localStorage.getItem(KEYS.tombstones)) || []; }
+      catch (e) { return []; }
+    }
+    function saveTombstones(t) { localStorage.setItem(KEYS.tombstones, JSON.stringify(t)); }
+
+    function genSyncKey() {
+      // 32 hex chars, ~128 bits entropy. crypto.randomUUID is fine but contains hyphens.
+      const buf = new Uint8Array(16);
+      crypto.getRandomValues(buf);
+      return [...buf].map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // ---- Sync engine ----
+    const syncStatus = { state: 'idle', at: 0, error: null, listeners: new Set() };
+    function setSyncStatus(state, error) {
+      syncStatus.state = state; syncStatus.at = Date.now(); syncStatus.error = error || null;
+      syncStatus.listeners.forEach(fn => { try { fn(syncStatus); } catch (e) {} });
+    }
+    function onSyncStatus(fn) {
+      syncStatus.listeners.add(fn);
+      return () => syncStatus.listeners.delete(fn);
+    }
+
+    function gatherForSync() {
+      const out = [];
+      const idx = loadProjects();
+      const byId = new Map(idx.map(m => [m.id, m]));
+      for (const meta of idx) {
+        const p = loadProject(meta.id);
+        if (!p) continue;
+        out.push({
+          id: p.id, name: p.name, rawText: p.rawText,
+          cursor: p.cursor,
+          createdAt: meta.createdAt || p.createdAt || Date.now(),
+          lastOpenedAt: meta.lastOpenedAt || Date.now(),
+          updatedAt: p.updatedAt || meta.lastOpenedAt || Date.now(),
+        });
+      }
+      for (const t of loadTombstones()) out.push(t);
+      return out;
+    }
+
+    function applyMerged(merged) {
+      // Reset local projects to match server's view (but tombstones live separately)
+      const oldIdx = loadProjects();
+      for (const m of oldIdx) localStorage.removeItem(KEYS.project(m.id));
+      const newIdx = [];
+      const tombstones = [];
+      for (const p of merged) {
+        if (p.deletedAt) {
+          tombstones.push(p);
+          continue;
+        }
+        localStorage.setItem(KEYS.project(p.id), JSON.stringify({
+          id: p.id, name: p.name, rawText: p.rawText,
+          cursor: p.cursor, updatedAt: p.updatedAt,
+        }));
+        newIdx.push({
+          id: p.id, name: p.name,
+          createdAt: p.createdAt || Date.now(),
+          lastOpenedAt: p.lastOpenedAt || Date.now(),
+        });
+      }
+      saveProjects(newIdx);
+      saveTombstones(tombstones);
+    }
+
+    async function syncNow() {
+      const cfg = loadSyncCfg();
+      if (!cfg.key || !cfg.server) { setSyncStatus('off'); return { skipped: true }; }
+      setSyncStatus('syncing');
+      try {
+        const url = cfg.server.replace(/\/$/, '') + '/api/sync';
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Sync-Key': cfg.key },
+          body: JSON.stringify({ projects: gatherForSync() }),
+        });
+        if (!res.ok) {
+          const t = await res.text().catch(() => '');
+          throw new Error('HTTP ' + res.status + (t ? ': ' + t.slice(0, 200) : ''));
+        }
+        const data = await res.json();
+        applyMerged(data.projects || []);
+        cfg.lastSyncAt = Date.now(); cfg.lastError = null; saveSyncCfg(cfg);
+        setSyncStatus('synced');
+        // Re-render list view if we're on it
+        if (route() === '#/' || route() === '#' || route() === '') render();
+        return { ok: true };
+      } catch (e) {
+        cfg.lastError = String(e.message || e); saveSyncCfg(cfg);
+        setSyncStatus('error', e.message);
+        return { ok: false, error: e.message };
+      }
+    }
+
+    let syncTimer = null;
+    function scheduleSync(delayMs) {
+      const cfg = loadSyncCfg();
+      if (!cfg.key || !cfg.server || cfg.autoSync === false) return;
+      if (syncTimer) clearTimeout(syncTimer);
+      syncTimer = setTimeout(() => { syncNow(); }, delayMs == null ? 2500 : delayMs);
+    }
 
     // ---- DOM helpers ----
     function el(tag, attrs) {
@@ -201,8 +335,14 @@
     // ---- View: project list ----
     function renderList() {
       const projects = loadProjects().slice().sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+      const cfg = loadSyncCfg();
+      const syncBtn = el('button', {
+        class: 'icon-btn', title: 'Sync settings',
+        onclick: () => navigate('#/sync'),
+      }, cfg.key && cfg.server ? '☁︎' : '☁');
       const header = el('header', null,
         el('h1', null, 'Crochet tracker'),
+        syncBtn,
         el('button', { class: 'btn', onclick: () => navigate('#/new') }, '+ New')
       );
       let body;
@@ -308,12 +448,6 @@
     }
 
     // ---- View: tracker ----
-    let saveTimer = null;
-    function scheduleSave(project) {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => saveProject(project), 200);
-    }
-
     function renderTracker(id) {
       const project = loadProject(id);
       if (!project) { navigate('#/'); return; }
@@ -419,14 +553,14 @@
         project.cursor = next;
         paint();
         flashPress();
-        scheduleSave(project);
+        saveProject(project);
       }
       function doUndo() {
         const next = C.undo(project.cursor);
         if (next === project.cursor) return;
         project.cursor = next;
         paint();
-        scheduleSave(project);
+        saveProject(project);
       }
 
       bigBtn.addEventListener('click', doPress);
@@ -548,6 +682,190 @@
       document.body.appendChild(scrim);
     }
 
+    // ---- View: sync settings ----
+    function renderSync() {
+      const cfg = loadSyncCfg();
+      const header = el('header', null,
+        el('button', { class: 'icon-btn', onclick: () => navigate('#/') }, '←'),
+        el('h1', null, 'Sync settings')
+      );
+
+      const status = el('div', { class: 'card muted' });
+      function paintStatus() {
+        clear(status);
+        if (!cfg.key || !cfg.server) {
+          status.appendChild(el('div', null, 'Local only. Set a server URL and a sync key, then "Sync now" to start.'));
+          return;
+        }
+        const ago = cfg.lastSyncAt ? Math.max(0, Math.round((Date.now() - cfg.lastSyncAt) / 1000)) : null;
+        const agoStr = ago == null ? 'never' : (ago < 60 ? ago + 's ago' : Math.round(ago / 60) + ' min ago');
+        const s = syncStatus.state;
+        const labels = {
+          idle: 'Ready. Last synced: ' + agoStr,
+          syncing: 'Syncing…',
+          synced: 'Synced ' + agoStr,
+          error: 'Error: ' + (syncStatus.error || cfg.lastError || 'unknown'),
+          off: 'Off',
+        };
+        status.appendChild(el('div', null, labels[s] || ('Last synced: ' + agoStr)));
+      }
+      paintStatus();
+      const off = onSyncStatus(paintStatus);
+      cleanupFns.push(off);
+
+      // Server input
+      const serverInput = el('input', { type: 'text', placeholder: 'https://natpat.net' });
+      serverInput.value = cfg.server || '';
+      serverInput.addEventListener('change', () => {
+        const c = loadSyncCfg();
+        c.server = serverInput.value.trim();
+        saveSyncCfg(c);
+        paintStatus();
+        renderSyncKey();
+      });
+
+      // Sync key block (with copy + regenerate)
+      const keyInput = el('input', { type: 'text', placeholder: 'Generate or paste a sync key' });
+      keyInput.value = cfg.key || '';
+      keyInput.addEventListener('change', () => {
+        const c = loadSyncCfg();
+        c.key = keyInput.value.trim();
+        saveSyncCfg(c);
+        paintStatus();
+        renderSyncKey();
+      });
+      const copyBtn = el('button', { class: 'btn secondary', onclick: () => {
+        if (!keyInput.value) return;
+        navigator.clipboard.writeText(keyInput.value).then(() => {
+          copyBtn.textContent = '✓ Copied';
+          setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1200);
+        });
+      } }, '📋 Copy');
+      const genBtn = el('button', { class: 'btn secondary', onclick: () => {
+        if (cfg.key && !confirm('Replace your existing key? You will lose access to data synced under the old key (other devices keep their copy).')) return;
+        const c = loadSyncCfg();
+        c.key = genSyncKey();
+        saveSyncCfg(c);
+        keyInput.value = c.key;
+        renderSyncKey();
+      } }, '🎲 Generate new');
+
+      const qrBox = el('div', { class: 'card', style: 'display:none;align-items:center;justify-content:center;padding:8px' });
+      const qrBtn = el('button', { class: 'btn secondary', onclick: () => toggleQR() }, '📷 Show QR');
+      function buildShareURL() {
+        const c = loadSyncCfg();
+        if (!c.key || !c.server) return null;
+        const base = location.origin === 'null' ? '' : location.origin + location.pathname;
+        const url = (base || c.server.replace(/\/$/, '') + '/') + '?syncKey=' + encodeURIComponent(c.key) +
+                    '&server=' + encodeURIComponent(c.server);
+        return url;
+      }
+      function renderQR() {
+        clear(qrBox);
+        const url = buildShareURL();
+        if (!url) {
+          qrBox.appendChild(el('div', { class: 'muted', style: 'padding:16px' },
+            'Set both server and key before generating a QR code.'));
+          return;
+        }
+        if (typeof window.qrcode !== 'function') {
+          qrBox.appendChild(el('div', { class: 'muted', style: 'padding:16px' }, 'Loading QR library…'));
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js';
+          s.onload = () => renderQR();
+          s.onerror = () => {
+            clear(qrBox);
+            qrBox.appendChild(el('div', { class: 'muted', style: 'padding:16px' },
+              "QR library couldn't load. URL below — paste it into the other device's browser:",
+              el('div', { style: 'font-family:ui-monospace;font-size:12px;word-break:break-all;margin-top:8px' }, url)));
+          };
+          document.head.appendChild(s);
+          return;
+        }
+        const qr = window.qrcode(0, 'M');
+        qr.addData(url);
+        qr.make();
+        const container = el('div');
+        container.innerHTML = qr.createSvgTag(5, 8);
+        const svg = container.firstChild;
+        if (svg && svg.tagName && svg.tagName.toLowerCase() === 'svg') {
+          svg.style.maxWidth = '100%';
+          svg.style.background = '#fff';
+        }
+        qrBox.appendChild(container);
+        qrBox.appendChild(el('div', { class: 'muted', style: 'font-size:11px;word-break:break-all;margin-top:8px' }, url));
+      }
+      function toggleQR() {
+        if (qrBox.style.display === 'none' || !qrBox.style.display) {
+          qrBox.style.display = 'flex';
+          qrBox.style.flexDirection = 'column';
+          qrBtn.textContent = '✕ Hide QR';
+          renderQR();
+        } else {
+          qrBox.style.display = 'none';
+          qrBtn.textContent = '📷 Show QR';
+        }
+      }
+      function renderSyncKey() { /* placeholder for live updates */ if (qrBox.style.display === 'flex') renderQR(); }
+
+      const syncNowBtn = el('button', { class: 'btn', onclick: async () => {
+        const c = loadSyncCfg();
+        c.server = serverInput.value.trim();
+        c.key = keyInput.value.trim();
+        saveSyncCfg(c);
+        await syncNow();
+      } }, '↻ Sync now');
+      const disableBtn = el('button', { class: 'btn secondary', onclick: () => {
+        if (!confirm('Disable sync? Your local data stays; the server keeps its copy under the existing key.')) return;
+        const c = loadSyncCfg();
+        delete c.server; delete c.key; saveSyncCfg(c);
+        setSyncStatus('off');
+        navigate('#/');
+      } }, 'Disable sync');
+
+      clear(app);
+      app.append(
+        header,
+        status,
+        el('div', { class: 'stack' },
+          el('div', { class: 'muted' }, 'Server URL'),
+          serverInput,
+          el('div', { class: 'muted' }, 'Sync key (anyone with this key can read/write your projects)'),
+          keyInput,
+          el('div', { class: 'row' }, copyBtn, genBtn, el('div', { style: 'flex:1' }), qrBtn),
+          qrBox,
+          el('div', { class: 'row' },
+            syncNowBtn,
+            el('div', { style: 'flex:1' }),
+            cfg.key || cfg.server ? disableBtn : null,
+          ),
+        ),
+      );
+    }
+
+    // ---- URL key import (one-shot, on first load) ----
+    function maybeImportFromURL() {
+      const u = new URL(location.href);
+      const key = u.searchParams.get('syncKey');
+      const server = u.searchParams.get('server');
+      if (!key && !server) return;
+      const cfg = loadSyncCfg();
+      const willReplace = (cfg.key && cfg.key !== key) || (cfg.server && cfg.server !== server);
+      const msg = willReplace
+        ? 'Import sync settings from this link? It will replace your current sync key/server.'
+        : 'Set up sync with the values from this link?';
+      if (confirm(msg)) {
+        if (key) cfg.key = key;
+        if (server) cfg.server = server;
+        saveSyncCfg(cfg);
+      }
+      // Strip the params from the URL so a refresh doesn't re-prompt
+      u.searchParams.delete('syncKey');
+      u.searchParams.delete('server');
+      const cleaned = u.pathname + (u.search || '') + (u.hash || '');
+      history.replaceState({}, '', cleaned);
+    }
+
     // ---- Dispatcher ----
     let cleanupFns = [];
     function render() {
@@ -556,10 +874,16 @@
       const h = route();
       if (h === '#/' || h === '#' || h === '') renderList();
       else if (h === '#/new') renderNew();
+      else if (h === '#/sync') renderSync();
       else if (h.startsWith('#/p/')) renderTracker(h.slice(4));
       else navigate('#/');
     }
+    maybeImportFromURL();
     render();
+    // Sync on open if configured
+    if ((function () { const c = loadSyncCfg(); return c.key && c.server; })()) {
+      syncNow();
+    }
   })();
   </script>
 </body>
