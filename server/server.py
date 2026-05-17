@@ -6,11 +6,15 @@ That key is the credential — anyone holding it can read/write that user's data
 The server stores one JSON blob per key in SQLite and merges client uploads
 last-write-wins per project (by `updatedAt`).
 
-Quick start:
+Quick start (with uv):
     cd server
-    python3 -m venv .venv && . .venv/bin/activate
-    pip install -r requirements.txt
-    uvicorn server:app --host 0.0.0.0 --port 8000
+    uv sync                              # install runtime deps
+    uv run server.py                     # start on 127.0.0.1:8000
+    # or:
+    uv run uvicorn server:app --port 8000
+
+Run the tests:
+    uv run --group dev test_server.py
 
 Optional env vars:
     CROCHET_DB=/path/to/crochet.db    SQLite file (default: ./crochet.db)
