@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Crochet tracker</title>
+  <style>
+    :root {
+      --bg: #14171a;
+      --fg: #f1f1f1;
+      --muted: #8a93a0;
+      --accent: #5cc8ff;
+      --card: #1f242b;
+      --card-hi: #2a313a;
+      --danger: #ff6b6b;
+      --warn: #ffc857;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #fafafa;
+        --fg: #1a1a1a;
+        --muted: #666;
+        --accent: #0070c9;
+        --card: #fff;
+        --card-hi: #eef1f5;
+        --danger: #c33;
+        --warn: #a86b00;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; background: var(--bg); color: var(--fg); min-height: 100vh;
+      font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    #app { max-width: 640px; margin: 0 auto; padding: 16px; min-height: 100vh; }
+    header { display: flex; align-items: center; gap: 8px; padding-bottom: 12px; }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; flex: 1; }
+    button { font: inherit; }
+    .icon-btn {
+      background: none; border: 0; color: var(--fg); font-size: 20px;
+      cursor: pointer; padding: 8px 10px; border-radius: 6px; line-height: 1;
+    }
+    .icon-btn:hover { background: var(--card-hi); }
+    .btn {
+      background: var(--accent); color: #001; border: 0; padding: 12px 16px;
+      border-radius: 10px; cursor: pointer; font-weight: 600;
+    }
+    .btn:hover { filter: brightness(1.05); }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn.secondary { background: var(--card-hi); color: var(--fg); }
+    .muted { color: var(--muted); }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    .card { background: var(--card); border-radius: 12px; padding: 16px; }
+    .hidden { display: none !important; }
+
+    /* Project list */
+    .proj-item {
+      display: flex; align-items: center; gap: 12px; padding: 14px;
+      background: var(--card); border-radius: 10px; margin-bottom: 8px;
+    }
+    .proj-name { flex: 1; font-weight: 600; cursor: pointer; }
+    .proj-meta { font-size: 13px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+
+    /* Forms */
+    input[type=text], textarea {
+      width: 100%; padding: 12px; border-radius: 8px;
+      border: 1px solid var(--card-hi); background: var(--card); color: var(--fg);
+      font: inherit;
+    }
+    textarea {
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      min-height: 220px; resize: vertical; white-space: pre;
+    }
+    .err-list, .warn-list, .ok-box {
+      font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px;
+      background: var(--card); padding: 12px; border-radius: 8px; white-space: pre-wrap;
+    }
+    .err-list { border-left: 4px solid var(--danger); }
+    .warn-list { border-left: 4px solid var(--warn); }
+    .ok-box { border-left: 4px solid var(--accent); color: var(--muted); }
+
+    /* Tracker */
+    .row-head { padding: 14px; background: var(--card); border-radius: 12px; margin-bottom: 12px; }
+    .row-num { font-size: 22px; font-weight: 700; }
+    .row-num small { font-size: 13px; color: var(--muted); font-weight: 500; margin-left: 6px; }
+    .row-raw {
+      font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
+      margin-top: 6px; font-size: 13px; word-break: break-word;
+    }
+    .pbar { height: 8px; background: var(--card-hi); border-radius: 4px; overflow: hidden; margin: 12px 0 6px; }
+    .pbar > div { height: 100%; background: var(--accent); transition: width 100ms ease-out; }
+    .row-progress { font-size: 14px; color: var(--muted); }
+
+    .big-button {
+      width: 100%; min-height: 50vh; background: var(--accent); color: #001;
+      border: 0; border-radius: 16px; cursor: pointer; padding: 24px;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      gap: 8px; box-shadow: 0 6px 0 rgba(0,0,0,0.2);
+      transition: transform 60ms, box-shadow 60ms, filter 80ms;
+      -webkit-user-select: none; user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .big-button:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 4px 0 rgba(0,0,0,0.2); }
+    .big-button:disabled { opacity: 0.7; cursor: default; box-shadow: none; }
+    @keyframes press-pulse {
+      0%   { transform: scale(1);    filter: brightness(1); }
+      35%  { transform: scale(0.97); filter: brightness(1.25); }
+      100% { transform: scale(1);    filter: brightness(1); }
+    }
+    .big-button.pressed:not(:disabled) { animation: press-pulse 160ms ease-out; }
+    @keyframes pbar-pulse {
+      0%   { background: var(--accent); }
+      30%  { background: #fff; }
+      100% { background: var(--accent); }
+    }
+    .pbar > div.pulse { animation: pbar-pulse 200ms ease-out; }
+    .big-button .next-small { font-size: 14px; opacity: 0.7; font-weight: 500; }
+    .big-button .next-label { font-size: 44px; font-weight: 800; letter-spacing: -0.5px; text-align: center; }
+    .big-button .hint { font-size: 12px; opacity: 0.55; margin-top: 16px; }
+
+    .tracker-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .tracker-actions .btn { flex: 1; }
+
+    /* Drawer */
+    .scrim {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9;
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    .drawer {
+      background: var(--card); border-radius: 12px; padding: 16px;
+      max-width: 480px; width: 100%; display: flex; flex-direction: column; gap: 10px;
+      max-height: 90vh; overflow: auto;
+    }
+    .drawer .btn { width: 100%; text-align: left; }
+    .drawer h3 { margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script src="lib.js"></script>
+  <script>
+  (function () {
+    'use strict';
+    const C = window.Crochet;
+    const app = document.getElementById('app');
+
+    // ---- Storage ----
+    const KEYS = {
+      projects: 'wooble:projects',
+      project: (id) => 'wooble:project:' + id,
+    };
+    function loadProjects() {
+      try { return JSON.parse(localStorage.getItem(KEYS.projects)) || []; }
+      catch (e) { return []; }
+    }
+    function saveProjects(list) { localStorage.setItem(KEYS.projects, JSON.stringify(list)); }
+    function loadProject(id) {
+      try { return JSON.parse(localStorage.getItem(KEYS.project(id))); }
+      catch (e) { return null; }
+    }
+    function saveProject(p) { localStorage.setItem(KEYS.project(p.id), JSON.stringify(p)); }
+    function deleteProject(id) {
+      localStorage.removeItem(KEYS.project(id));
+      saveProjects(loadProjects().filter(p => p.id !== id));
+    }
+    function touchProject(id) {
+      const list = loadProjects();
+      const p = list.find(x => x.id === id);
+      if (p) { p.lastOpenedAt = Date.now(); saveProjects(list); }
+    }
+    function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+    // ---- DOM helpers ----
+    function el(tag, attrs) {
+      const e = document.createElement(tag);
+      if (attrs) for (const k in attrs) {
+        const v = attrs[k];
+        if (v == null) continue;
+        if (k === 'class') e.className = v;
+        else if (k === 'style') e.style.cssText = v;
+        else if (k.startsWith('on')) e[k] = v;
+        else e.setAttribute(k, v);
+      }
+      for (let i = 2; i < arguments.length; i++) {
+        const c = arguments[i];
+        if (c == null || c === false) continue;
+        if (Array.isArray(c)) c.forEach(x => x != null && e.appendChild(typeof x === 'string' ? document.createTextNode(x) : x));
+        else e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+      }
+      return e;
+    }
+    function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+
+    // ---- Routing ----
+    function route() { return location.hash || '#/'; }
+    function navigate(h) { location.hash = h; }
+    window.addEventListener('hashchange', render);
+
+    // ---- View: project list ----
+    function renderList() {
+      const projects = loadProjects().slice().sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+      const header = el('header', null,
+        el('h1', null, 'Crochet tracker'),
+        el('button', { class: 'btn', onclick: () => navigate('#/new') }, '+ New')
+      );
+      let body;
+      if (projects.length === 0) {
+        body = el('div', { class: 'card muted' },
+          "No projects yet. Tap '+ New' to paste a pattern.");
+      } else {
+        body = el('div', null);
+        for (const p of projects) {
+          const proj = loadProject(p.id);
+          const parsed = proj ? C.parsePattern(proj.rawText) : { rows: [] };
+          const cur = (proj && proj.cursor) || { rowIndex: 0 };
+          const done = !proj || cur.rowIndex >= parsed.rows.length;
+          const cur_row = parsed.rows[cur.rowIndex];
+          const last_row = parsed.rows[parsed.rows.length - 1];
+          const meta = done
+            ? 'Complete'
+            : 'Row ' + (cur_row ? cur_row.rowNumber : '?') +
+              ' of ' + (last_row ? last_row.rowNumber : '?');
+          body.appendChild(el('div', { class: 'proj-item' },
+            el('div', { class: 'proj-name', onclick: () => navigate('#/p/' + p.id) },
+              p.name,
+              el('div', { class: 'proj-meta' }, meta)
+            ),
+            el('button', {
+              class: 'icon-btn', title: 'Delete',
+              onclick: (e) => {
+                e.stopPropagation();
+                if (confirm('Delete "' + p.name + '"?')) { deleteProject(p.id); render(); }
+              }
+            }, '🗑')
+          ));
+        }
+      }
+      clear(app); app.append(header, body);
+    }
+
+    // ---- View: new project ----
+    function renderNew() {
+      const header = el('header', null,
+        el('button', { class: 'icon-btn', onclick: () => navigate('#/') }, '←'),
+        el('h1', null, 'New project')
+      );
+      const nameInput = el('input', { type: 'text', placeholder: 'Project name (e.g. Otto the Octopus)' });
+      const patternInput = el('textarea', {
+        placeholder:
+          'Paste your pattern, one row per line. Examples:\n\n' +
+          '1: 6 sc in MR (6)\n' +
+          '2: 6 inc (12)\n' +
+          '3: [1 sc, inc] x 6 (18)\n' +
+          '4-7: 18 sc (18)\n' +
+          '8: [1 sc, dec] x 6 (12)\n' +
+          '9: 6 dec (6)\n' +
+          '10: FO\n\n' +
+          '# Comments start with # and are ignored.'
+      });
+      const errBox = el('div', { class: 'stack' });
+
+      function preview() {
+        clear(errBox);
+        const text = patternInput.value;
+        if (!text.trim()) return;
+        const parsed = C.parsePattern(text);
+        if (parsed.errors.length) {
+          errBox.appendChild(el('div', { class: 'err-list' },
+            'Errors:\n' + parsed.errors.map(e => '  line ' + e.line + ': ' + e.message).join('\n')));
+        }
+        if (parsed.warnings.length) {
+          errBox.appendChild(el('div', { class: 'warn-list' },
+            'Warnings (you can still proceed):\n' + parsed.warnings.map(w => '  ' + w.message).join('\n')));
+        }
+        if (!parsed.errors.length && parsed.rows.length > 0) {
+          errBox.appendChild(el('div', { class: 'ok-box' },
+            parsed.rows.length + ' row' + (parsed.rows.length === 1 ? '' : 's') + ' parsed.'));
+        }
+      }
+      patternInput.addEventListener('input', preview);
+
+      function create() {
+        const name = (nameInput.value || '').trim();
+        const text = patternInput.value;
+        if (!name) { alert('Please give the project a name.'); nameInput.focus(); return; }
+        const parsed = C.parsePattern(text);
+        if (parsed.errors.length) { alert('Please fix parse errors first.'); return; }
+        if (parsed.rows.length === 0) { alert('No rows parsed.'); return; }
+        const id = newId();
+        saveProject({ id, name, rawText: text, cursor: C.initialState() });
+        const list = loadProjects();
+        list.push({ id, name, createdAt: Date.now(), lastOpenedAt: Date.now() });
+        saveProjects(list);
+        navigate('#/p/' + id);
+      }
+
+      const actions = el('div', { class: 'row' },
+        el('button', { class: 'btn secondary', onclick: () => navigate('#/') }, 'Cancel'),
+        el('div', { style: 'flex:1' }),
+        el('button', { class: 'btn', onclick: create }, 'Parse & start')
+      );
+
+      clear(app);
+      app.append(header, el('div', { class: 'stack' }, nameInput, patternInput, errBox, actions));
+      setTimeout(() => nameInput.focus(), 0);
+    }
+
+    // ---- View: tracker ----
+    let saveTimer = null;
+    function scheduleSave(project) {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => saveProject(project), 200);
+    }
+
+    function renderTracker(id) {
+      const project = loadProject(id);
+      if (!project) { navigate('#/'); return; }
+      touchProject(id);
+      const parsed = C.parsePattern(project.rawText);
+
+      if (parsed.errors.length) {
+        clear(app);
+        app.append(
+          el('header', null,
+            el('button', { class: 'icon-btn', onclick: () => navigate('#/') }, '←'),
+            el('h1', null, project.name)
+          ),
+          el('div', { class: 'err-list' },
+            "Couldn't parse this pattern:\n" +
+            parsed.errors.map(e => '  line ' + e.line + ': ' + e.message).join('\n')
+          ),
+          el('div', { style: 'margin-top:12px' },
+            el('button', { class: 'btn', onclick: () => editPattern(project) }, 'Edit pattern')
+          )
+        );
+        return;
+      }
+
+      // Repair cursor if pattern shrank
+      let cur = project.cursor;
+      if (cur.rowIndex > parsed.rows.length) {
+        cur = C.initialState();
+        project.cursor = cur; saveProject(project);
+      } else if (cur.rowIndex < parsed.rows.length &&
+                 cur.stepIndex > parsed.rows[cur.rowIndex].pressSteps.length) {
+        cur = { rowIndex: cur.rowIndex, stepIndex: parsed.rows[cur.rowIndex].pressSteps.length, history: cur.history };
+        project.cursor = cur; saveProject(project);
+      }
+
+      const rowHead = el('div', { class: 'row-head' });
+      const bigBtn = el('button', { class: 'big-button', type: 'button' });
+      const undoBtn = el('button', { class: 'btn secondary', onclick: doUndo }, '↶ Undo');
+      const actions = el('div', { class: 'tracker-actions' }, undoBtn);
+
+      function paint() {
+        const cur = project.cursor;
+        const done = C.isDone(cur, parsed);
+        clear(rowHead);
+        if (done) {
+          rowHead.append(
+            el('div', { class: 'row-num' }, 'All rows complete'),
+            el('div', { class: 'row-raw' }, project.name + ' — finished!')
+          );
+        } else {
+          const row = parsed.rows[cur.rowIndex];
+          const prog = C.rowProgress(cur, parsed);
+          const lastNum = parsed.rows[parsed.rows.length - 1].rowNumber;
+          const rangeNote = row.rangeEnd && row.rangeEnd !== row.rangeStart
+            ? ' (within ' + row.rangeStart + '–' + row.rangeEnd + ')' : '';
+          rowHead.append(
+            el('div', { class: 'row-num' },
+              'Row ' + row.rowNumber,
+              el('small', null, '/ ' + lastNum + rangeNote)
+            ),
+            el('div', { class: 'row-raw' }, row.rawLine.trim()),
+            (function () {
+              const bar = el('div', { class: 'pbar' });
+              const fill = el('div');
+              const pct = prog.total ? Math.round((prog.done / prog.total) * 100) : 0;
+              fill.style.width = pct + '%';
+              bar.appendChild(fill);
+              return bar;
+            })(),
+            el('div', { class: 'row-progress' }, prog.done + ' / ' + prog.total + ' stitches')
+          );
+        }
+        clear(bigBtn);
+        if (done) {
+          bigBtn.disabled = true;
+          bigBtn.appendChild(el('div', { class: 'next-label' }, '🎉 Done!'));
+        } else {
+          bigBtn.disabled = false;
+          bigBtn.appendChild(el('div', { class: 'next-small' }, 'Next:'));
+          bigBtn.appendChild(el('div', { class: 'next-label' }, C.nextLabel(cur, parsed)));
+          bigBtn.appendChild(el('div', { class: 'hint' }, 'Tap, or press Space / Enter'));
+        }
+        undoBtn.disabled = (project.cursor.history.length === 0);
+      }
+
+      function flashPress() {
+        bigBtn.classList.remove('pressed');
+        // Force reflow so the animation restarts on rapid presses.
+        void bigBtn.offsetWidth;
+        bigBtn.classList.add('pressed');
+        const fill = rowHead.querySelector('.pbar > div');
+        if (fill) {
+          fill.classList.remove('pulse');
+          void fill.offsetWidth;
+          fill.classList.add('pulse');
+        }
+      }
+      bigBtn.addEventListener('animationend', () => bigBtn.classList.remove('pressed'));
+
+      function doPress() {
+        const next = C.advance(project.cursor, parsed);
+        if (next === project.cursor) return;
+        project.cursor = next;
+        paint();
+        flashPress();
+        scheduleSave(project);
+      }
+      function doUndo() {
+        const next = C.undo(project.cursor);
+        if (next === project.cursor) return;
+        project.cursor = next;
+        paint();
+        scheduleSave(project);
+      }
+
+      bigBtn.addEventListener('click', doPress);
+
+      function onKey(e) {
+        if (e.target.matches('input, textarea')) return;
+        if (e.code === 'Space' || e.code === 'Enter') {
+          e.preventDefault();
+          doPress();
+        } else if (e.code === 'Backspace') {
+          e.preventDefault();
+          doUndo();
+        }
+      }
+      document.addEventListener('keydown', onKey);
+      cleanupFns.push(() => document.removeEventListener('keydown', onKey));
+
+      const header = el('header', null,
+        el('button', { class: 'icon-btn', onclick: () => navigate('#/') }, '←'),
+        el('h1', null, project.name),
+        el('button', { class: 'icon-btn', title: 'Menu', onclick: () => openMenu(project, parsed) }, '☰')
+      );
+      clear(app);
+      app.append(header, rowHead, bigBtn, actions);
+      paint();
+    }
+
+    // ---- Drawer / menu ----
+    function makeScrim() {
+      const scrim = el('div', { class: 'scrim' });
+      scrim.onclick = (e) => { if (e.target === scrim) document.body.removeChild(scrim); };
+      return scrim;
+    }
+    function openMenu(project, parsed) {
+      const scrim = makeScrim();
+      const close = () => document.body.removeChild(scrim);
+      const drawer = el('div', { class: 'drawer' },
+        el('h3', null, 'Menu'),
+        el('button', { class: 'btn secondary', onclick: () => { close(); jumpDialog(project, parsed); } }, 'Jump to row…'),
+        el('button', { class: 'btn secondary', onclick: () => { close(); editPattern(project); } }, 'Edit pattern'),
+        el('button', { class: 'btn secondary', onclick: () => { close(); navigate('#/'); } }, 'Back to projects'),
+        el('button', { class: 'btn', onclick: close }, 'Close')
+      );
+      scrim.appendChild(drawer);
+      document.body.appendChild(scrim);
+    }
+    function jumpDialog(project, parsed) {
+      const scrim = makeScrim();
+      const close = () => document.body.removeChild(scrim);
+      const cur_num = parsed.rows[project.cursor.rowIndex]?.rowNumber || '';
+      const input = el('input', { type: 'text', placeholder: 'Row number', value: cur_num });
+      const min = parsed.rows[0]?.rowNumber;
+      const max = parsed.rows[parsed.rows.length - 1]?.rowNumber;
+      function go() {
+        const target = parseInt(input.value, 10);
+        const idx = parsed.rows.findIndex(r => r.rowNumber === target);
+        if (idx < 0) { alert('No row ' + target + ' in this pattern.'); return; }
+        project.cursor = C.jumpTo(project.cursor, idx, 0);
+        saveProject(project);
+        close();
+        renderTracker(project.id);
+      }
+      const drawer = el('div', { class: 'drawer' },
+        el('h3', null, 'Jump to row'),
+        el('div', { class: 'muted' }, 'Pattern covers rows ' + min + '–' + max + '.'),
+        input,
+        el('div', { class: 'row' },
+          el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
+          el('div', { style: 'flex:1' }),
+          el('button', { class: 'btn', onclick: go }, 'Jump')
+        )
+      );
+      scrim.appendChild(drawer);
+      document.body.appendChild(scrim);
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+      input.addEventListener('keydown', e => { if (e.code === 'Enter') { e.preventDefault(); go(); } });
+    }
+    function editPattern(project) {
+      const scrim = makeScrim();
+      const close = () => document.body.removeChild(scrim);
+      const ta = el('textarea', null);
+      ta.value = project.rawText;
+      const errBox = el('div', { class: 'stack' });
+      function save() {
+        const text = ta.value;
+        const parsed = C.parsePattern(text);
+        clear(errBox);
+        if (parsed.errors.length) {
+          errBox.appendChild(el('div', { class: 'err-list' },
+            parsed.errors.map(e => 'line ' + e.line + ': ' + e.message).join('\n')));
+          return;
+        }
+        const oldParsed = C.parsePattern(project.rawText);
+        const oldRow = oldParsed.rows[project.cursor.rowIndex];
+        const newRow = parsed.rows[project.cursor.rowIndex];
+        const rowChanged = !oldRow || !newRow || oldRow.rawLine !== newRow.rawLine;
+        const stepOOB = newRow && project.cursor.stepIndex > newRow.pressSteps.length;
+        if (rowChanged || stepOOB) {
+          if (!confirm('The current row changed; position will reset to the start. Continue?')) return;
+          project.cursor = C.initialState();
+        }
+        project.rawText = text;
+        saveProject(project);
+        // Also update name in index if needed (no, name not edited here)
+        close();
+        renderTracker(project.id);
+      }
+      const drawer = el('div', { class: 'drawer', style: 'max-width: 640px' },
+        el('h3', null, 'Edit pattern'),
+        ta,
+        errBox,
+        el('div', { class: 'row' },
+          el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
+          el('div', { style: 'flex:1' }),
+          el('button', { class: 'btn', onclick: save }, 'Save')
+        )
+      );
+      scrim.appendChild(drawer);
+      document.body.appendChild(scrim);
+    }
+
+    // ---- Dispatcher ----
+    let cleanupFns = [];
+    function render() {
+      cleanupFns.forEach(fn => { try { fn(); } catch (e) {} });
+      cleanupFns = [];
+      const h = route();
+      if (h === '#/' || h === '#' || h === '') renderList();
+      else if (h === '#/new') renderNew();
+      else if (h.startsWith('#/p/')) renderTracker(h.slice(4));
+      else navigate('#/');
+    }
+    render();
+  })();
+  </script>
+</body>
+</html>
