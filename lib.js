@@ -5,13 +5,10 @@
   'use strict';
 
   // ---- Stitch table ----
-  // presses = number of button presses to complete this stitch
-  // outputDelta[i] = how many output stitches the i-th press contributes
-  // labels[i] = what to display as "Next:" before the i-th press
   const STITCH_INFO = {
     'sc':    { presses: 1, outputDelta: [1],    labels: ['sc'] },
-    'inc':   { presses: 2, outputDelta: [0, 2], labels: ['inc (1/2)', 'inc (2/2)'] },
-    'dec':   { presses: 2, outputDelta: [0, 1], labels: ['dec (1/2)', 'dec (2/2)'] },
+    'inc':   { presses: 2, outputDelta: [1, 1], labels: ['inc (1/2)', 'inc (2/2)'] },
+    'dec':   { presses: 1, outputDelta: [1],    labels: ['dec'] },
     'ch':    { presses: 1, outputDelta: [1],    labels: ['ch'] },
     'sl st': { presses: 1, outputDelta: [1],    labels: ['sl st'] },
     'mr':    { presses: 1, outputDelta: [0],    labels: ['MR (form magic ring)'] },
@@ -25,23 +22,120 @@
   }
 
   // ---- Parser ----
+  //
+  // Block types in the order they appear:
+  //   { type: 'section', name, intro: [string], pressSteps: [1 ack step] }
+  //     - Renders as a "Starting NAME" / "Finished X · Next: NAME" card.
+  //     - `intro` holds any notes that appeared between the [NAME] header
+  //       and the first row of the section — they're shown inside the card.
+  //   { type: 'row',  section, rowNumber, ..., pressSteps }
+  //   { type: 'note', section, content, pressSteps: [1 ack step] }
 
   function parsePattern(text) {
-    const rows = [];
+    const blocks = [];
     const errors = [];
     const warnings = [];
     const lines = (text || '').split('\n');
-    for (let i = 0; i < lines.length; i++) {
+    let currentSection = null;
+    // Section block whose `intro` we should fold notes into. Cleared as soon
+    // as we see a row in that section.
+    let pendingSectionBlock = null;
+    let i = 0;
+
+    function addNote(content, raw) {
+      if (pendingSectionBlock) {
+        pendingSectionBlock.intro.push(content);
+      } else {
+        blocks.push({
+          type: 'note',
+          section: currentSection,
+          content,
+          rawLine: raw,
+          expectedTotal: 0,
+          pressSteps: [{ stitch: 'note', label: '📝 done reading', outputDelta: 0 }],
+        });
+      }
+    }
+
+    while (i < lines.length) {
+      const lineNo = i + 1;
       const raw = lines[i];
-      const line = raw.replace(/#.*$/, '').trim();
-      if (!line) continue;
-      let parsed;
-      try {
-        parsed = parseLine(line);
-      } catch (e) {
-        errors.push({ line: i + 1, message: e.message, raw });
+      const stripped = raw.replace(/#.*$/, '').trim();
+
+      if (!stripped) { i++; continue; }
+
+      // Section header: [NAME]
+      let m = stripped.match(/^\[(.+)\]$/);
+      if (m) {
+        currentSection = m[1].trim();
+        const sectionBlock = {
+          type: 'section',
+          name: currentSection,
+          section: currentSection,
+          intro: [],
+          rawLine: raw,
+          expectedTotal: 0,
+          pressSteps: [{ stitch: 'section', label: '▶ tap to start', outputDelta: 0 }],
+        };
+        blocks.push(sectionBlock);
+        pendingSectionBlock = sectionBlock;
+        i++;
         continue;
       }
+
+      // Multi-line note: note: """ ... """
+      m = stripped.match(/^note:\s*"""(.*)$/);
+      if (m) {
+        const firstRest = m[1];
+        if (firstRest.trim().endsWith('"""')) {
+          const trimmed = firstRest.trim();
+          const content = trimmed.slice(0, -3).trim();
+          addNote(content, raw);
+          i++;
+          continue;
+        }
+        const noteLines = [];
+        if (firstRest) noteLines.push(firstRest);
+        i++;
+        let closed = false;
+        while (i < lines.length) {
+          const l = lines[i];
+          if (l.replace(/\s+$/, '').endsWith('"""')) {
+            const lastPart = l.replace(/"""\s*$/, '').replace(/\s+$/, '');
+            if (lastPart) noteLines.push(lastPart);
+            closed = true;
+            i++;
+            break;
+          }
+          noteLines.push(l);
+          i++;
+        }
+        if (!closed) {
+          errors.push({ line: lineNo, message: 'Unclosed multi-line note (missing """)', raw });
+          continue;
+        }
+        addNote(noteLines.join('\n').trim(), raw);
+        continue;
+      }
+
+      // Single-line note: note: text
+      m = stripped.match(/^note:\s*(.+)$/);
+      if (m) {
+        addNote(m[1].trim(), raw);
+        i++;
+        continue;
+      }
+
+      // Row
+      let parsed;
+      try {
+        parsed = parseLine(stripped);
+      } catch (e) {
+        errors.push({ line: lineNo, message: e.message, raw });
+        i++;
+        continue;
+      }
+      pendingSectionBlock = null; // intro window closes once a row appears
       const start = parsed.rangeStart;
       const end = parsed.rangeEnd == null ? parsed.rangeStart : parsed.rangeEnd;
       for (let r = start; r <= end; r++) {
@@ -49,13 +143,15 @@
         const computedTotal = pressSteps.reduce((a, s) => a + s.outputDelta, 0);
         if (parsed.expectedTotal != null && parsed.expectedTotal !== computedTotal) {
           warnings.push({
-            line: i + 1,
+            line: lineNo,
             row: r,
             message: 'Row ' + r + ': declared total (' + parsed.expectedTotal +
               ") doesn't match computed (" + computedTotal + ')',
           });
         }
-        rows.push({
+        blocks.push({
+          type: 'row',
+          section: currentSection,
           rowNumber: r,
           rangeStart: parsed.rangeStart,
           rangeEnd: parsed.rangeEnd,
@@ -64,8 +160,15 @@
           pressSteps,
         });
       }
+      i++;
     }
-    return { rows, errors, warnings };
+
+    return {
+      blocks,
+      errors,
+      warnings,
+      rows: blocks.filter(b => b.type === 'row'),
+    };
   }
 
   function parseLine(line) {
@@ -123,7 +226,6 @@
       inMR = true;
       text = mrMatch[1].trim();
     }
-    // Match optional count + stitch name (allow "sl st" with optional space)
     const stitchMatch = text.match(/^(?:(\d+)\s*)?(sl\s*st|sc|inc|dec|ch|mr|fo)$/i);
     if (!stitchMatch) {
       throw new Error('Unknown instruction: "' + text + '"');
@@ -139,11 +241,7 @@
     const info = STITCH_INFO[stitch];
     const steps = [];
     for (let i = 0; i < info.presses; i++) {
-      steps.push({
-        stitch,
-        label: info.labels[i],
-        outputDelta: info.outputDelta[i],
-      });
+      steps.push({ stitch, label: info.labels[i], outputDelta: info.outputDelta[i] });
     }
     return steps;
   }
@@ -169,58 +267,196 @@
   }
 
   // ---- Cursor / state ----
+  //
+  // State: { blockIndex, stepIndex, markerPending, history }
+  // History entries: { blockIndex, stepIndex, markerPending }
+  //
+  // markerPending is a UI flag: true between the press that completes the
+  // first stitch of a row and the next press that acks the marker. The
+  // marker is a "virtual" step injected by press() when options.stitchMarker
+  // is on.
 
   const HISTORY_CAP = 200;
 
   function initialState() {
-    return { rowIndex: 0, stepIndex: 0, history: [] };
+    return { blockIndex: 0, stepIndex: 0, markerPending: false, history: [] };
   }
 
-  function advance(state, parsed) {
-    if (isDone(state, parsed)) return state;
-    const history = state.history.concat([{ rowIndex: state.rowIndex, stepIndex: state.stepIndex }]);
+  function pushHistory(state) {
+    const history = state.history.concat([{
+      blockIndex: state.blockIndex,
+      stepIndex: state.stepIndex,
+      markerPending: !!state.markerPending,
+    }]);
     if (history.length > HISTORY_CAP) history.splice(0, history.length - HISTORY_CAP);
-    const row = parsed.rows[state.rowIndex];
-    let rowIndex = state.rowIndex;
+    return history;
+  }
+
+  // Internal raw advance: one positional step forward, no marker logic, no history.
+  function advanceRaw(state, parsed) {
+    if (isDone(state, parsed)) return state;
+    const block = parsed.blocks[state.blockIndex];
+    let blockIndex = state.blockIndex;
     let stepIndex = state.stepIndex + 1;
-    if (stepIndex >= row.pressSteps.length) {
-      rowIndex++;
+    if (stepIndex >= block.pressSteps.length) {
+      blockIndex++;
       stepIndex = 0;
     }
-    return { rowIndex, stepIndex, history };
+    return { blockIndex, stepIndex, markerPending: false, history: state.history };
+  }
+
+  // External: same as advanceRaw but pushes history.
+  function advance(state, parsed) {
+    if (isDone(state, parsed)) return state;
+    const history = pushHistory(state);
+    const next = advanceRaw(state, parsed);
+    return { ...next, history };
+  }
+
+  // Press: the "user pressed the big button" handler.
+  // Knows about marker injection.
+  function press(state, parsed, options) {
+    // Acknowledge a pending marker without changing position.
+    if (state.markerPending) {
+      return { ...state, markerPending: false, history: pushHistory(state) };
+    }
+    if (isDone(state, parsed)) return state;
+    const prevDone = rowProgress(state, parsed).done;
+    const prevBlockIdx = state.blockIndex;
+    const next = advance(state, parsed);
+    if (next === state) return state;
+    const nowDone = rowProgress(next, parsed).done;
+    const block = parsed.blocks[prevBlockIdx];
+    const sameBlock = next.blockIndex === prevBlockIdx;
+    const triggers = options && options.stitchMarker
+      && block && block.type === 'row'
+      && prevDone === 0 && nowDone > 0
+      && sameBlock
+      && !isDone(next, parsed);
+    if (triggers) next.markerPending = true;
+    return next;
+  }
+
+  // Positional back. If markerPending, clears it without moving. Else,
+  // decrements stepIndex (or rolls to previous block's last step).
+  function back(state, parsed) {
+    if (state.markerPending) {
+      return { ...state, markerPending: false, history: pushHistory(state) };
+    }
+    if (state.blockIndex === 0 && state.stepIndex === 0) return state;
+    let blockIndex = state.blockIndex;
+    let stepIndex = state.stepIndex - 1;
+    if (stepIndex < 0) {
+      blockIndex--;
+      if (blockIndex < 0) return state;
+      stepIndex = parsed.blocks[blockIndex].pressSteps.length - 1;
+    }
+    const history = pushHistory(state);
+    return { blockIndex, stepIndex, markerPending: false, history };
   }
 
   function undo(state) {
     if (state.history.length === 0) return state;
     const history = state.history.slice(0, -1);
     const prev = state.history[state.history.length - 1];
-    return { rowIndex: prev.rowIndex, stepIndex: prev.stepIndex, history };
+    return {
+      blockIndex: prev.blockIndex,
+      stepIndex: prev.stepIndex,
+      markerPending: !!prev.markerPending,
+      history,
+    };
   }
 
-  function jumpTo(state, rowIndex, stepIndex) {
+  function jumpTo(state, blockIndex, stepIndex) {
     if (stepIndex == null) stepIndex = 0;
-    const history = state.history.concat([{ rowIndex: state.rowIndex, stepIndex: state.stepIndex }]);
-    if (history.length > HISTORY_CAP) history.splice(0, history.length - HISTORY_CAP);
-    return { rowIndex, stepIndex, history };
+    return {
+      blockIndex,
+      stepIndex,
+      markerPending: false,
+      history: pushHistory(state),
+    };
   }
 
   function isDone(state, parsed) {
-    return state.rowIndex >= parsed.rows.length;
+    return state.blockIndex >= parsed.blocks.length;
   }
 
   function nextLabel(state, parsed) {
+    if (state && state.markerPending) return '🔖 done placing marker';
     if (isDone(state, parsed)) return 'Done! 🎉';
-    const row = parsed.rows[state.rowIndex];
-    const step = row.pressSteps[state.stepIndex];
+    const block = parsed.blocks[state.blockIndex];
+    const step = block.pressSteps[state.stepIndex];
     return step ? step.label : '(end of row)';
   }
 
   function rowProgress(state, parsed) {
     if (isDone(state, parsed)) return { done: 0, total: 0 };
-    const row = parsed.rows[state.rowIndex];
+    const block = parsed.blocks[state.blockIndex];
     let done = 0;
-    for (let i = 0; i < state.stepIndex; i++) done += row.pressSteps[i].outputDelta;
-    return { done, total: row.expectedTotal };
+    for (let i = 0; i < state.stepIndex; i++) done += block.pressSteps[i].outputDelta;
+    return { done, total: block.expectedTotal };
+  }
+
+  function currentBlock(state, parsed) {
+    if (isDone(state, parsed)) return null;
+    return parsed.blocks[state.blockIndex];
+  }
+
+  function rowsOf(parsed) { return parsed.blocks.filter(b => b.type === 'row'); }
+
+  function sectionsOf(parsed) {
+    const names = [];
+    const seen = new Set();
+    for (const b of parsed.blocks) {
+      const n = b.section;
+      if (n != null && !seen.has(n)) { seen.add(n); names.push(n); }
+    }
+    return names;
+  }
+
+  // Section that the previous *row* belongs to, if any. Used for the
+  // "Finished X · Next: Y" header on section blocks.
+  function previousSectionName(parsed, blockIndex) {
+    for (let i = blockIndex - 1; i >= 0; i--) {
+      const b = parsed.blocks[i];
+      if (b.type === 'row' || b.type === 'note') {
+        return b.section != null ? b.section : null;
+      }
+    }
+    return null;
+  }
+
+  // Last row block in a given section name (or null for "no section").
+  function lastRowOfSection(parsed, sectionName) {
+    let last = null;
+    for (const b of parsed.blocks) {
+      if (b.type === 'row' && b.section === sectionName) last = b;
+    }
+    return last;
+  }
+
+  // Migrate cursors stored in older formats:
+  //   - `rowIndex` field (pre-blocks model)  ->  `blockIndex`
+  //   - missing `markerPending`              ->  false
+  function normalizeCursor(c) {
+    if (!c) return initialState();
+    const fix = (entry) => {
+      if (!entry) return null;
+      if ('blockIndex' in entry) return entry;
+      if ('rowIndex' in entry) {
+        return { blockIndex: entry.rowIndex, stepIndex: entry.stepIndex || 0, markerPending: !!entry.markerPending };
+      }
+      return null;
+    };
+    const headFix = fix(c);
+    const head = headFix || initialState();
+    const out = {
+      blockIndex: head.blockIndex || 0,
+      stepIndex: head.stepIndex || 0,
+      markerPending: !!head.markerPending,
+      history: (c.history || []).map(h => fix(h)).filter(h => h != null),
+    };
+    return out;
   }
 
   const api = {
@@ -231,11 +467,20 @@
     expandInstructions,
     initialState,
     advance,
+    advanceRaw,
+    press,
+    back,
     undo,
     jumpTo,
     isDone,
     nextLabel,
     rowProgress,
+    currentBlock,
+    rowsOf,
+    sectionsOf,
+    previousSectionName,
+    lastRowOfSection,
+    normalizeCursor,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

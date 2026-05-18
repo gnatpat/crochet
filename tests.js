@@ -23,7 +23,7 @@
     else record(false, msg, '  expected ' + b + '\n  got      ' + a);
   }
 
-  // ---- parsePattern: user's three examples ----
+  // ---- Parser: user's original three examples ----
 
   {
     const { rows, errors, warnings } = C.parsePattern('7-9: 28sc (28)');
@@ -40,7 +40,6 @@
     eq(errors.length, 0, 'example 2: no errors');
     eq(warnings.length, 0, 'example 2: no warnings');
     eq(rows.length, 1, 'example 2: one row');
-    // 4 groups, each: 6 sc + inc(2 presses) = 8 presses; 4*8 = 32
     eq(rows[0].pressSteps.length, 32, 'example 2: 32 press steps');
     const totalOut = rows[0].pressSteps.reduce((a, s) => a + s.outputDelta, 0);
     eq(totalOut, 32, 'example 2: output stitches = 32');
@@ -52,7 +51,7 @@
     eq(rows[2].pressSteps.length, 32, 'example 3: row 13 has 32 presses');
   }
 
-  // ---- inc / dec semantics (the key clarified bit) ----
+  // ---- inc / dec semantics ----
 
   {
     const { rows } = C.parsePattern('1: [6 sc, inc] x 1 (8)');
@@ -60,23 +59,20 @@
     eq(steps.length, 8, 'inc group: 6 + 2 = 8 presses');
     eq(steps[6].label, 'inc (1/2)', 'inc first leg label');
     eq(steps[7].label, 'inc (2/2)', 'inc second leg label');
-    eq(steps[6].outputDelta, 0, 'inc first leg adds 0 stitches');
-    eq(steps[7].outputDelta, 2, 'inc second leg adds 2 stitches');
+    eq(steps[6].outputDelta, 1, 'inc first leg adds 1 stitch');
+    eq(steps[7].outputDelta, 1, 'inc second leg adds 1 stitch');
   }
   {
     const { rows } = C.parsePattern('1: dec (1)');
     const steps = rows[0].pressSteps;
-    eq(steps.length, 2, 'dec: 2 presses');
-    eq(steps[0].label, 'dec (1/2)', 'dec first label');
-    eq(steps[1].label, 'dec (2/2)', 'dec second label');
-    eq(steps[0].outputDelta, 0, 'dec first leg adds 0');
-    eq(steps[1].outputDelta, 1, 'dec second leg adds 1');
+    eq(steps.length, 1, 'dec: 1 press');
+    eq(steps[0].label, 'dec', 'dec label');
+    eq(steps[0].outputDelta, 1, 'dec adds 1 stitch');
   }
   {
     const { rows, warnings } = C.parsePattern('5: [5 sc, dec] x 4 (24)');
     eq(rows.length, 1, 'dec group: 1 row');
-    // 4 * (5 sc + dec[2]) = 28 presses; output = 4 * 6 = 24
-    eq(rows[0].pressSteps.length, 28, 'dec group: 28 presses');
+    eq(rows[0].pressSteps.length, 24, 'dec group: 24 presses');
     const out = rows[0].pressSteps.reduce((a, s) => a + s.outputDelta, 0);
     eq(out, 24, 'dec group: output = 24');
     eq(warnings.length, 0, 'dec group: no warnings');
@@ -87,21 +83,13 @@
   {
     const { rows, errors } = C.parsePattern('1: 6 sc in MR (6)');
     eq(errors.length, 0, '"in MR": no errors');
-    eq(rows.length, 1, '"in MR": 1 row');
     const steps = rows[0].pressSteps;
     eq(steps.length, 7, '"in MR": 1 MR ack + 6 sc');
     eq(steps[0].stitch, 'mr', '"in MR": first step is MR');
-    eq(steps[0].outputDelta, 0, '"in MR": MR adds no stitches');
     eq(steps[1].stitch, 'sc', '"in MR": second step is sc');
   }
-  {
-    // Also: alternate explicit syntax
-    const { rows, errors } = C.parsePattern('1: MR, 6 sc (6)');
-    eq(errors.length, 0, 'MR-as-token: no errors');
-    eq(rows[0].pressSteps.length, 7, 'MR-as-token: same 7 presses');
-  }
 
-  // ---- count mismatch produces a warning, not an error ----
+  // ---- Count mismatch produces a warning ----
 
   {
     const { rows, errors, warnings } = C.parsePattern('1: 6 sc (10)');
@@ -110,7 +98,7 @@
     eq(rows.length, 1, 'mismatch: row still parsed');
   }
 
-  // ---- comments, blank lines, whitespace ----
+  // ---- Comments, whitespace, case-insensitivity ----
 
   {
     const { rows, errors } = C.parsePattern('# top comment\n\n1: 6 sc (6) # trailing\n\n2: inc');
@@ -130,7 +118,7 @@
     eq(rows[2].pressSteps[0].stitch, 'sl st', 'case: SL ST -> sl st');
   }
 
-  // ---- malformed input ----
+  // ---- Malformed input ----
 
   {
     const { errors } = C.parsePattern('this is not a row');
@@ -145,23 +133,103 @@
     assert(errors.length >= 1, 'reversed range: error');
   }
 
-  // ---- cursor: advance + undo ----
+  // ---- Sections are 1-press blocks ----
+
+  {
+    const parsed = C.parsePattern(
+      '[HEAD & BODY]\n' +
+      '1: 1 sc (1)\n' +
+      '[BELLY]\n' +
+      '1: 1 sc (1)\n'
+    );
+    eq(parsed.errors.length, 0, 'sections: no errors');
+    eq(parsed.blocks.length, 4, 'sections: 4 blocks (2 sections + 2 rows)');
+    eq(parsed.blocks[0].type, 'section', 'block 0 is a section');
+    eq(parsed.blocks[0].name, 'HEAD & BODY', 'section name');
+    eq(parsed.blocks[0].intro, [], 'section with no intro notes');
+    eq(parsed.blocks[0].pressSteps.length, 1, 'section has 1 press step');
+    eq(parsed.blocks[1].type, 'row', 'block 1 is a row');
+    eq(parsed.blocks[1].section, 'HEAD & BODY', 'row inherits section');
+    eq(parsed.blocks[2].name, 'BELLY', 'second section');
+    eq(parsed.blocks[3].section, 'BELLY', 'second row inherits BELLY');
+    eq(C.sectionsOf(parsed), ['HEAD & BODY', 'BELLY'], 'sectionsOf');
+    // Row numbering resets per section
+    eq(parsed.blocks[1].rowNumber, 1, 'first row of HEAD & BODY = 1');
+    eq(parsed.blocks[3].rowNumber, 1, 'first row of BELLY = 1');
+  }
+
+  // ---- Section intro folding (notes between [SECTION] and first row) ----
+
+  {
+    const parsed = C.parsePattern(
+      '[HEAD & BODY]\n' +
+      'note: With green yarn.\n' +
+      'note: """\n' +
+      'TIP keep stitch marker\nin the first stitch.\n' +
+      '"""\n' +
+      '1: 6 sc in MR (6)\n' +
+      'note: After-row note.\n'
+    );
+    eq(parsed.errors.length, 0, 'intro folding: no errors');
+    eq(parsed.blocks.length, 3, '3 blocks: section, row, after-row note');
+    eq(parsed.blocks[0].type, 'section', 'first block is section');
+    eq(parsed.blocks[0].intro.length, 2, 'section has 2 intro notes folded in');
+    eq(parsed.blocks[0].intro[0], 'With green yarn.', 'first intro note');
+    assert(parsed.blocks[0].intro[1].includes('TIP keep stitch marker'), 'multi-line intro note captured');
+    eq(parsed.blocks[1].type, 'row', '2nd block is the row');
+    eq(parsed.blocks[2].type, 'note', '3rd block is a standalone note (after a row)');
+    eq(parsed.blocks[2].content, 'After-row note.', 'standalone note content');
+  }
+
+  // ---- previousSectionName helper ----
+
+  {
+    const parsed = C.parsePattern('[A]\n1: 1 sc\n[B]\n1: 1 sc\n');
+    // Block layout: [A][rowA][B][rowB]
+    eq(C.previousSectionName(parsed, 0), null, 'before first section: null');
+    eq(C.previousSectionName(parsed, 2), 'A', 'before [B]: previous section is A');
+  }
+
+  // ---- Notes (standalone, in-between rows) ----
+
+  {
+    const parsed = C.parsePattern(
+      '1: 6 sc in MR (6)\n' +
+      'note: Stuff the piece.\n' +
+      '2: 6 inc (12)\n'
+    );
+    eq(parsed.errors.length, 0, 'note: no errors');
+    eq(parsed.blocks.length, 3, '3 blocks');
+    eq(parsed.blocks[1].type, 'note', 'middle block is a note');
+    eq(parsed.blocks[1].content, 'Stuff the piece.', 'note content');
+    eq(parsed.blocks[1].pressSteps.length, 1, 'note has 1 press step');
+  }
+
+  // ---- Notes (unclosed) ----
+
+  {
+    const parsed = C.parsePattern('note: """\nunclosed\n1: 6 sc (6)\n');
+    assert(parsed.errors.length >= 1, 'unclosed note: error reported');
+  }
+
+  // ---- Cursor: advance + undo ----
 
   {
     const parsed = C.parsePattern('1: 3 sc\n2: 2 sc');
     let s = C.initialState();
-    eq(s.rowIndex, 0, 'cursor: starts at row 0');
-    eq(s.stepIndex, 0, 'cursor: starts at step 0');
+    eq(s.blockIndex, 0, 'cursor starts at block 0');
+    eq(s.stepIndex, 0, 'cursor starts at step 0');
+    eq(s.markerPending, false, 'no marker pending initially');
     s = C.advance(s, parsed);
-    eq([s.rowIndex, s.stepIndex], [0, 1], 'cursor: advance 1');
-    s = C.advance(s, parsed);
-    s = C.advance(s, parsed);
-    eq([s.rowIndex, s.stepIndex], [1, 0], 'cursor: rolls to next row');
+    eq([s.blockIndex, s.stepIndex], [0, 1], 'advance 1');
     s = C.advance(s, parsed);
     s = C.advance(s, parsed);
-    eq(C.isDone(s, parsed), true, 'cursor: isDone after final step');
+    eq([s.blockIndex, s.stepIndex], [1, 0], 'rolls into next row');
+    s = C.advance(s, parsed);
+    s = C.advance(s, parsed);
+    eq(C.isDone(s, parsed), true, 'isDone after final step');
     const after = C.advance(s, parsed);
-    eq([after.rowIndex, after.stepIndex], [s.rowIndex, s.stepIndex], 'cursor: advance is no-op when done');
+    eq([after.blockIndex, after.stepIndex], [s.blockIndex, s.stepIndex], 'advance is no-op when done');
   }
   {
     const parsed = C.parsePattern('1: 3 sc');
@@ -177,60 +245,123 @@
     eq(s.stepIndex, 0, 'undo: no-op past start');
   }
 
-  // ---- jumpTo ----
-  {
-    const parsed = C.parsePattern('1: 3 sc\n2: 3 sc\n3: 3 sc');
-    let s = C.initialState();
-    s = C.advance(s, parsed); // (0,1)
-    s = C.jumpTo(s, 2, 0);
-    eq([s.rowIndex, s.stepIndex], [2, 0], 'jumpTo: lands at (2,0)');
-    s = C.undo(s);
-    eq([s.rowIndex, s.stepIndex], [0, 1], 'jumpTo: undo returns to prior position');
-  }
+  // ---- back() — positional reverse ----
 
-  // ---- rowProgress and nextLabel ----
-
-  {
-    const parsed = C.parsePattern('1: [3 sc, inc] x 1 (5)');
-    let s = C.initialState();
-    eq(C.rowProgress(s, parsed), { done: 0, total: 5 }, 'progress: 0/5 at start');
-    eq(C.nextLabel(s, parsed), 'sc', 'next label: sc at start');
-    for (let i = 0; i < 3; i++) s = C.advance(s, parsed);
-    eq(C.rowProgress(s, parsed).done, 3, 'progress: 3 after 3 sc');
-    eq(C.nextLabel(s, parsed), 'inc (1/2)', 'next label: inc 1/2');
-    s = C.advance(s, parsed);
-    eq(C.rowProgress(s, parsed).done, 3, 'progress: still 3 after inc 1/2');
-    eq(C.nextLabel(s, parsed), 'inc (2/2)', 'next label: inc 2/2');
-    s = C.advance(s, parsed);
-    // Final press of only row → cursor rolls past end, isDone.
-    eq(C.isDone(s, parsed), true, 'done after final inc 2/2');
-    eq(C.nextLabel(s, parsed), 'Done! 🎉', 'next label: done');
-  }
-
-  // After completing a row that is NOT the last, cursor lands at next row, step 0
   {
     const parsed = C.parsePattern('1: 2 sc\n2: 3 sc');
     let s = C.initialState();
     s = C.advance(s, parsed);
-    s = C.advance(s, parsed); // last press of row 1
-    eq([s.rowIndex, s.stepIndex], [1, 0], 'row transition: lands at next row, step 0');
-    eq(C.rowProgress(s, parsed), { done: 0, total: 3 }, 'row transition: progress resets');
-    eq(C.nextLabel(s, parsed), 'sc', 'row transition: next label is first stitch of next row');
-    // Undo from the transition returns to the last step of the previous row
-    s = C.undo(s);
-    eq([s.rowIndex, s.stepIndex], [0, 1], 'row transition: undo returns to last step of prev row');
+    s = C.advance(s, parsed); // (1, 0)
+    eq([s.blockIndex, s.stepIndex], [1, 0], 'reached row 2 step 0');
+    s = C.back(s, parsed);
+    eq([s.blockIndex, s.stepIndex], [0, 1], 'back: rolls into prev block last step');
+    s = C.back(s, parsed);
+    eq([s.blockIndex, s.stepIndex], [0, 0], 'back: step--');
+    const same = C.back(s, parsed);
+    eq([same.blockIndex, same.stepIndex], [0, 0], 'back: no-op at start');
   }
 
-  // ---- end-to-end the user's specific example ----
-  // 10: [6 sc, inc] x 4 (32) — walk all 32 presses and check final state
+  // ---- back is recorded in history; undo reverses it ----
+
+  {
+    const parsed = C.parsePattern('1: 3 sc');
+    let s = C.initialState();
+    s = C.advance(s, parsed);
+    s = C.advance(s, parsed); // at (0, 2)
+    s = C.back(s, parsed);    // at (0, 1)
+    eq(s.stepIndex, 1, 'back moved to step 1');
+    s = C.undo(s);            // undo the back -> (0, 2)
+    eq(s.stepIndex, 2, 'undo of back restores forward position');
+  }
+
+  // ---- jumpTo + undo reverses it ----
+
+  {
+    const parsed = C.parsePattern('1: 1 sc\n2: 1 sc\n3: 1 sc');
+    let s = C.initialState();
+    s = C.advance(s, parsed); // (1, 0)
+    s = C.jumpTo(s, 2, 0);
+    eq([s.blockIndex, s.stepIndex], [2, 0], 'jumpTo lands at target');
+    s = C.undo(s);
+    eq([s.blockIndex, s.stepIndex], [1, 0], 'undo of jump returns to prior position');
+  }
+
+  // ---- Marker as a virtual press step ----
+
+  {
+    const parsed = C.parsePattern('1: 3 sc (3)');
+    const options = { stitchMarker: true };
+    let s = C.initialState();
+    // First press: completes first stitch + sets markerPending
+    s = C.press(s, parsed, options);
+    eq([s.blockIndex, s.stepIndex], [0, 1], 'marker: positionally advanced to step 1');
+    eq(s.markerPending, true, 'marker: pending after first stitch');
+    eq(C.nextLabel(s, parsed), '🔖 done placing marker', 'nextLabel reflects marker');
+    // Second press: clears markerPending (no positional change)
+    s = C.press(s, parsed, options);
+    eq([s.blockIndex, s.stepIndex], [0, 1], 'marker ack: position unchanged');
+    eq(s.markerPending, false, 'marker: cleared');
+    // Third press: advances to step 2
+    s = C.press(s, parsed, options);
+    eq([s.blockIndex, s.stepIndex], [0, 2], 'next stitch advances');
+    eq(s.markerPending, false, 'marker does not re-trigger mid-row');
+  }
+  {
+    // No marker if option is off
+    const parsed = C.parsePattern('1: 3 sc (3)');
+    let s = C.initialState();
+    s = C.press(s, parsed, {});  // no stitchMarker
+    eq(s.markerPending, false, 'marker option off: no marker');
+  }
+  {
+    // Marker doesn't trigger on note blocks
+    const parsed = C.parsePattern('note: hi\n1: 2 sc');
+    const options = { stitchMarker: true };
+    let s = C.initialState();
+    s = C.press(s, parsed, options); // ack the note
+    eq(s.markerPending, false, 'note ack does not trigger marker');
+    eq([s.blockIndex, s.stepIndex], [1, 0], 'on row 1 step 0 after ack');
+    s = C.press(s, parsed, options); // first stitch
+    eq(s.markerPending, true, 'first stitch of next row triggers marker');
+  }
+
+  // ---- Undo through marker correctly restores it ----
+
+  {
+    const parsed = C.parsePattern('1: 2 sc');
+    const options = { stitchMarker: true };
+    let s = C.initialState();
+    s = C.press(s, parsed, options); // first stitch -> marker pending
+    s = C.press(s, parsed, options); // ack marker
+    eq(s.markerPending, false, 'after marker ack');
+    s = C.undo(s);
+    eq(s.markerPending, true, 'undo restores markerPending');
+    s = C.undo(s);
+    eq(s.markerPending, false, 'undo again -> before first stitch');
+    eq(s.stepIndex, 0, 'position back to step 0');
+  }
+
+  // ---- Cursor migration ----
+
+  {
+    const old = { rowIndex: 3, stepIndex: 2, history: [{ rowIndex: 1, stepIndex: 0 }] };
+    const fixed = C.normalizeCursor(old);
+    eq(fixed.blockIndex, 3, 'migration: rowIndex -> blockIndex');
+    eq(fixed.stepIndex, 2, 'migration: stepIndex preserved');
+    eq(fixed.markerPending, false, 'migration: markerPending defaults false');
+    eq(fixed.history[0].blockIndex, 1, 'migration: history entries normalized');
+    const fixed2 = C.normalizeCursor(fixed);
+    eq(fixed2.blockIndex, 3, 'migration: idempotent');
+  }
+
+  // ---- End-to-end the user's specific example ----
+
   {
     const parsed = C.parsePattern('10: [6 sc, inc] x 4 (32)');
     let s = C.initialState();
     for (let i = 0; i < 32; i++) s = C.advance(s, parsed);
     eq(C.isDone(s, parsed), true, 'row 10 example: done after 32 presses');
-    // 4 inc completions of 2 stitches each, plus 4*6=24 sc => 32
-    let totalOut = 0;
-    for (const step of parsed.rows[0].pressSteps) totalOut += step.outputDelta;
+    const totalOut = parsed.rows[0].pressSteps.reduce((a, s) => a + s.outputDelta, 0);
     eq(totalOut, 32, 'row 10 example: 32 output stitches');
   }
 

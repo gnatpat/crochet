@@ -94,6 +94,7 @@
     .row-progress { font-size: 14px; color: var(--muted); }
 
     .big-button {
+      position: relative; overflow: hidden;
       width: 100%; min-height: 50vh; background: var(--accent); color: #001;
       border: 0; border-radius: 16px; cursor: pointer; padding: 24px;
       display: flex; flex-direction: column; justify-content: center; align-items: center;
@@ -102,20 +103,81 @@
       -webkit-user-select: none; user-select: none;
       -webkit-tap-highlight-color: transparent;
     }
+    .big-button > * { position: relative; z-index: 1; }
     .big-button:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 4px 0 rgba(0,0,0,0.2); }
     .big-button:disabled { opacity: 0.7; cursor: default; box-shadow: none; }
     @keyframes press-pulse {
-      0%   { transform: scale(1);    filter: brightness(1); }
-      35%  { transform: scale(0.97); filter: brightness(1.25); }
-      100% { transform: scale(1);    filter: brightness(1); }
+      0%   { transform: scale(1);    filter: brightness(1)   saturate(1); }
+      18%  { transform: scale(0.90); filter: brightness(1.5) saturate(1.3); }
+      55%  { transform: scale(1.04); filter: brightness(1.1) saturate(1); }
+      100% { transform: scale(1);    filter: brightness(1)   saturate(1); }
     }
-    .big-button.pressed:not(:disabled) { animation: press-pulse 160ms ease-out; }
+    .big-button.pressed:not(:disabled) { animation: press-pulse 260ms ease-out; }
+    /* Ripple */
+    .big-button::before {
+      content: ''; position: absolute; top: 50%; left: 50%;
+      width: 24px; height: 24px; border-radius: 50%;
+      background: rgba(255,255,255,0.75);
+      transform: translate(-50%, -50%) scale(0);
+      pointer-events: none; opacity: 0; z-index: 0;
+    }
+    .big-button.pressed:not(:disabled)::before { animation: ripple 360ms ease-out; }
+    @keyframes ripple {
+      0%   { transform: translate(-50%, -50%) scale(0);  opacity: 0.75; }
+      70%  { opacity: 0.3; }
+      100% { transform: translate(-50%, -50%) scale(45); opacity: 0; }
+    }
     @keyframes pbar-pulse {
       0%   { background: var(--accent); }
       30%  { background: #fff; }
       100% { background: var(--accent); }
     }
     .pbar > div.pulse { animation: pbar-pulse 200ms ease-out; }
+
+    /* Info card (shown for sections, notes, or marker prompts) */
+    .info-card {
+      background: var(--card); border-radius: 16px; padding: 20px 22px;
+      margin-bottom: 12px;
+      display: flex; flex-direction: column; gap: 14px;
+      border-left: 6px solid var(--accent);
+    }
+    /* Section/note cards are the main thing on screen — claim some height.
+       Marker cards sit alongside the row-head so they grow to fit content. */
+    .info-card.section, .info-card.note { min-height: 40vh; }
+    .info-card.section { border-left-color: var(--accent); }
+    .info-card.note    { border-left-color: var(--accent-2, #ff8acc); }
+    .info-card.marker  { border-left-color: var(--warn); }
+    .info-card-eyebrow {
+      font-size: 12px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.8px;
+    }
+    .info-card-title { font-size: 26px; font-weight: 800; letter-spacing: -0.3px; line-height: 1.2; }
+    .info-card-body {
+      font-size: 17px; line-height: 1.55; white-space: pre-wrap; color: var(--fg);
+    }
+    .info-card-body + .info-card-body {
+      margin-top: 0; padding-top: 12px; border-top: 1px solid var(--card-hi);
+    }
+    .info-card-foot {
+      font-size: 13px; color: var(--muted); margin-top: auto;
+    }
+    /* Compact big-button used when content lives in an info-card above */
+    .big-button.compact { min-height: 14vh; padding: 16px; }
+    .big-button.compact .next-label { font-size: 22px; }
+    .big-button.compact .hint { font-size: 11px; margin-top: 6px; }
+    .big-button.compact .next-small { display: none; }
+
+    /* Section label above row number */
+    .section-label {
+      font-size: 12px; font-weight: 700; color: var(--accent);
+      text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px;
+    }
+
+    /* Options page */
+    .option-row { background: var(--card); border-radius: 12px; padding: 14px; }
+    .option-row label { display: flex; gap: 14px; align-items: flex-start; cursor: pointer; }
+    .option-row input[type=checkbox] { width: 22px; height: 22px; margin-top: 2px; flex-shrink: 0; }
+    .option-row .option-hint { font-size: 13px; color: var(--muted); margin-top: 4px; }
     .big-button .next-small { font-size: 14px; opacity: 0.7; font-weight: 500; }
     .big-button .next-label { font-size: 44px; font-weight: 800; letter-spacing: -0.5px; text-align: center; }
     .big-button .hint { font-size: 12px; opacity: 0.55; margin-top: 16px; }
@@ -159,8 +221,11 @@
     }
     function saveProjects(list) { localStorage.setItem(KEYS.projects, JSON.stringify(list)); }
     function loadProject(id) {
-      try { return JSON.parse(localStorage.getItem(KEYS.project(id))); }
-      catch (e) { return null; }
+      try {
+        const p = JSON.parse(localStorage.getItem(KEYS.project(id)));
+        if (p && p.cursor) p.cursor = C.normalizeCursor(p.cursor);
+        return p;
+      } catch (e) { return null; }
     }
     function saveProject(p) {
       p.updatedAt = Date.now();
@@ -195,6 +260,14 @@
     }
     function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
+    // ---- Options ----
+    const OPTIONS_KEY = 'wooble:options';
+    function loadOptions() {
+      try { return JSON.parse(localStorage.getItem(OPTIONS_KEY)) || {}; }
+      catch (e) { return {}; }
+    }
+    function saveOptions(o) { localStorage.setItem(OPTIONS_KEY, JSON.stringify(o)); }
+
     // ---- LLM config (BYO OpenRouter key) ----
     const LLM_KEY = 'wooble:llm';
     function loadLlmCfg() {
@@ -206,15 +279,24 @@
     const CONVERT_PROMPT = [
       "You convert crochet patterns from natural language into a strict DSL. Output ONLY the DSL — no commentary, no markdown fences, no preamble.",
       "",
-      "DSL rules (one row per line):",
-      "  <row-or-range>: <instructions> (<total-stitches>)",
+      "DSL syntax:",
+      "  Row:       <row-or-range>: <instructions> (<total-stitches>)",
+      "  Section:   [SECTION NAME]                    (header on its own line)",
+      "  Note:      note: short single-line text",
+      "  Note:      note: \"\"\"                         (multi-line; close with \"\"\" on its own line)",
+      "             ...content...",
+      "             \"\"\"",
       "",
+      "Row rules:",
       "  - Row range: \"7-9: ...\" applies to rows 7, 8, and 9.",
       "  - Allowed stitch tokens: sc, inc, dec, ch, sl st, MR, FO (case-insensitive).",
       "  - Counts: prefix with a number, e.g. \"28 sc\" or \"28sc\".",
       "  - Repeated groups: \"[6 sc, inc] x 4\" means do (6 sc + inc) four times.",
       "  - Magic ring: use \"in MR\" suffix, e.g. \"6 sc in MR\".",
       "  - The trailing \"(N)\" is the total stitch count for that row.",
+      "  - Row numbering resets per section.",
+      "",
+      "Notes capture free text that the user needs to acknowledge at a point in the pattern: tips, stuffing instructions, fasten-off directions, color changes, etc. Use single-line `note:` for short reminders and `note: \"\"\"...\"\"\"` for multi-paragraph instructions.",
       "",
       "Natural-language mapping:",
       "  - \"Round N\" / \"Rnd N\" / \"R N\"  ->  \"N:\"",
@@ -224,34 +306,46 @@
       "  - \"decrease\" / \"sc2tog\" / \"invisible decrease\" / \"dec\"  ->  \"dec\"",
       "  - \"fasten off\" / \"FO\"  ->  \"FO\"",
       "  - \"single crochet\" / \"sc\"  ->  \"sc\"",
-      "  - If round numbers are listed separately from the instructions (e.g. a column of \"Rnd 1.\\nRnd 2.\" followed by the actual stitches below), align them in order.",
+      "  - Patterns often have a part name in ALL CAPS like \"HEAD & BODY\" followed by rounds. Treat the part name as a section: `[HEAD & BODY]`. The next part name starts a new section.",
+      "  - If round numbers are listed in a column then the actual stitches below, align them in order.",
+      "  - Lines beginning with \"TIP\", \"Stuff the piece\", \"Fasten off\", or similar are notes — capture them with `note:`.",
       "",
-      "Examples:",
-      "",
-      "Input:",
-      "Round 1. 6 sc in magic loop (6)",
-      "Round 2. 6 inc (12)",
-      "Rounds 3-4. 12 sc (12)",
-      "Round 5. [sc, inc] x 6 (18)",
-      "",
-      "Output:",
-      "1: 6 sc in MR (6)",
-      "2: 6 inc (12)",
-      "3-4: 12 sc (12)",
-      "5: [sc, inc] x 6 (18)",
+      "Example:",
       "",
       "Input:",
-      "Rnd 1.",
-      "Rnd 2.",
-      "Rnds 3-5.",
-      "start 6 sc in a magic loop (6)",
-      "6 inc (12)",
-      "12 sc (12)",
+      "HEAD & BODY",
+      "With green yarn.",
+      "",
+      "TIP Keep track of where you are by placing a stitch marker in the first stitch of the current round.",
+      "",
+      "Rnd 1. 6 sc in a magic loop (6)",
+      "Rnd 2. 6 inc (12)",
+      "Rnds 3-5. [sc, inc] x 6 (18)",
+      "Stuff the piece, shaping it like an egg.",
+      "Rnd 6. 8 dec (8)",
+      "Fasten off, weave in ends.",
+      "",
+      "BELLY",
+      "With white yarn.",
+      "",
+      "Rnd 1. 6 sc in a magic loop (6)",
+      "Rnd 2. 6 inc (12)",
       "",
       "Output:",
+      "[HEAD & BODY]",
+      "note: With green yarn.",
+      "note: Keep track of where you are by placing a stitch marker in the first stitch of the current round.",
       "1: 6 sc in MR (6)",
       "2: 6 inc (12)",
-      "3-5: 12 sc (12)",
+      "3-5: [sc, inc] x 6 (18)",
+      "note: Stuff the piece, shaping it like an egg.",
+      "6: 8 dec (8)",
+      "note: Fasten off, weave in ends.",
+      "",
+      "[BELLY]",
+      "note: With white yarn.",
+      "1: 6 sc in MR (6)",
+      "2: 6 inc (12)",
       "",
       "Pattern to convert:",
       "",
@@ -433,12 +527,17 @@
     function renderList() {
       const projects = loadProjects().slice().sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
       const cfg = loadSyncCfg();
+      const optionsBtn = el('button', {
+        class: 'icon-btn', title: 'Options',
+        onclick: () => navigate('#/settings'),
+      }, '⚙');
       const syncBtn = el('button', {
         class: 'icon-btn', title: 'Sync settings',
         onclick: () => navigate('#/sync'),
       }, cfg.key && cfg.server ? '☁︎' : '☁');
       const header = el('header', null,
         el('h1', null, 'Crochet tracker'),
+        optionsBtn,
         syncBtn,
         el('button', { class: 'btn', onclick: () => navigate('#/new') }, '+ New')
       );
@@ -450,15 +549,26 @@
         body = el('div', null);
         for (const p of projects) {
           const proj = loadProject(p.id);
-          const parsed = proj ? C.parsePattern(proj.rawText) : { rows: [] };
-          const cur = (proj && proj.cursor) || { rowIndex: 0 };
-          const done = !proj || cur.rowIndex >= parsed.rows.length;
-          const cur_row = parsed.rows[cur.rowIndex];
-          const last_row = parsed.rows[parsed.rows.length - 1];
+          const parsed = proj ? C.parsePattern(proj.rawText) : { blocks: [], rows: [] };
+          const cur = (proj && proj.cursor) || { blockIndex: 0 };
+          const done = !proj || cur.blockIndex >= parsed.blocks.length;
+          // Find the most recent row at or before the cursor for display.
+          let curRow = null;
+          let curSection = null;
+          for (let i = 0; i < parsed.blocks.length && i <= cur.blockIndex; i++) {
+            const b = parsed.blocks[i];
+            if (b.type === 'row') curRow = b;
+            if (b.type === 'section') curSection = b.name;
+            else if (b.section != null) curSection = b.section;
+          }
+          // "Y" should be the last row of the *current* section, not overall
+          const sectionKey = (curRow ? curRow.section : curSection) || null;
+          const lastInSection = C.lastRowOfSection(parsed, sectionKey);
+          const sectionPrefix = curSection ? curSection + ' · ' : '';
           const meta = done
             ? 'Complete'
-            : 'Row ' + (cur_row ? cur_row.rowNumber : '?') +
-              ' of ' + (last_row ? last_row.rowNumber : '?');
+            : sectionPrefix + 'Row ' + (curRow ? curRow.rowNumber : '1') +
+              ' of ' + (lastInSection ? lastInSection.rowNumber : '?');
           body.appendChild(el('div', { class: 'proj-item' },
             el('div', { class: 'proj-name', onclick: () => navigate('#/p/' + p.id) },
               p.name,
@@ -536,7 +646,7 @@
       const aiBtn = el('button', {
         class: 'btn secondary',
         onclick: () => aiConvertDialog(patternInput),
-      }, '🤖 Convert with AI');
+      }, '✨ Convert with AI');
       const actions = el('div', { class: 'row' },
         el('button', { class: 'btn secondary', onclick: () => navigate('#/') }, 'Cancel'),
         aiBtn,
@@ -575,37 +685,124 @@
       }
 
       // Repair cursor if pattern shrank
-      let cur = project.cursor;
-      if (cur.rowIndex > parsed.rows.length) {
+      let cur = C.normalizeCursor(project.cursor);
+      if (cur.blockIndex > parsed.blocks.length) {
         cur = C.initialState();
         project.cursor = cur; saveProject(project);
-      } else if (cur.rowIndex < parsed.rows.length &&
-                 cur.stepIndex > parsed.rows[cur.rowIndex].pressSteps.length) {
-        cur = { rowIndex: cur.rowIndex, stepIndex: parsed.rows[cur.rowIndex].pressSteps.length, history: cur.history };
+      } else if (cur.blockIndex < parsed.blocks.length &&
+                 cur.stepIndex > parsed.blocks[cur.blockIndex].pressSteps.length) {
+        cur = { blockIndex: cur.blockIndex, stepIndex: parsed.blocks[cur.blockIndex].pressSteps.length, history: cur.history };
         project.cursor = cur; saveProject(project);
+      } else {
+        project.cursor = cur;
       }
 
+      const infoCard = el('div', { class: 'info-card' });
+      infoCard.style.display = 'none';
       const rowHead = el('div', { class: 'row-head' });
+      rowHead.style.display = 'none';
       const bigBtn = el('button', { class: 'big-button', type: 'button' });
-      const undoBtn = el('button', { class: 'btn secondary', onclick: doUndo }, '↶ Undo');
-      const actions = el('div', { class: 'tracker-actions' }, undoBtn);
+      const backBtn  = el('button', { class: 'btn secondary', onclick: doBack }, '← Back');
+      const undoBtn  = el('button', { class: 'btn secondary', onclick: doUndo }, '↶ Undo');
+      const nextRowBtn = el('button', { class: 'btn secondary', onclick: doSkipRow }, '✓ Row done');
+      const actions = el('div', { class: 'tracker-actions' }, backBtn, undoBtn, nextRowBtn);
+
+      // Last "row" in each section, used for "Row X of Y" display
+      const lastRowPerSection = {};
+      for (const b of parsed.blocks) {
+        if (b.type === 'row') lastRowPerSection[b.section || ''] = b;
+      }
 
       function paint() {
         const cur = project.cursor;
         const done = C.isDone(cur, parsed);
+        const block = done ? null : C.currentBlock(cur, parsed);
+        const markerMode = !!(cur.markerPending && !done);
+        const sectionMode = !markerMode && block && block.type === 'section';
+        const noteMode    = !markerMode && block && block.type === 'note';
+        const rowMode     = !markerMode && block && block.type === 'row';
+
+        clear(infoCard);
+        infoCard.classList.remove('section', 'note', 'marker');
+
+        if (done) {
+          // Done state: show row-head with completion message
+          rowHead.style.display = '';
+          infoCard.style.display = 'none';
+          bigBtn.classList.remove('compact');
+        } else if (markerMode) {
+          // Marker prompt — keep the row-head visible so the user still sees
+          // which row/stitch they're on while placing the marker.
+          infoCard.style.display = '';
+          infoCard.classList.add('marker');
+          rowHead.style.display = '';
+          bigBtn.classList.add('compact');
+          const row = block && block.type === 'row' ? block : null;
+          infoCard.append(
+            el('div', { class: 'info-card-eyebrow' }, '🔖 Stitch marker'),
+            el('div', { class: 'info-card-title' }, 'Place a stitch marker'),
+            el('div', { class: 'info-card-body' },
+              'Put a stitch marker on the stitch you just made (the first stitch of ' +
+              (row ? 'Row ' + row.rowNumber : 'this row') + '). Then tap below to continue.'),
+            el('div', { class: 'info-card-foot' }, 'You can turn this off in ⚙ Options.'),
+          );
+        } else if (sectionMode) {
+          // Section transition
+          infoCard.style.display = '';
+          infoCard.classList.add('section');
+          rowHead.style.display = 'none';
+          bigBtn.classList.add('compact');
+          const prevName = C.previousSectionName(parsed, cur.blockIndex);
+          const title = prevName
+            ? 'Finished ' + prevName + ' · Next: ' + block.name
+            : 'Starting ' + block.name;
+          const children = [
+            el('div', { class: 'info-card-eyebrow' }, prevName ? '✨ Next part' : '✨ First part'),
+            el('div', { class: 'info-card-title' }, title),
+          ];
+          for (const intro of (block.intro || [])) {
+            children.push(el('div', { class: 'info-card-body' }, intro));
+          }
+          children.push(el('div', { class: 'info-card-foot' }, 'Tap below to begin this section.'));
+          infoCard.append(...children);
+        } else if (noteMode) {
+          // Note card
+          infoCard.style.display = '';
+          infoCard.classList.add('note');
+          rowHead.style.display = 'none';
+          bigBtn.classList.add('compact');
+          const lastRow = sectionLastRowBefore(parsed, cur.blockIndex, block.section);
+          const where = lastRow ? 'After Row ' + lastRow.rowNumber : 'Before Row 1';
+          const sectionTag = block.section ? block.section + ' · ' : '';
+          infoCard.append(
+            el('div', { class: 'info-card-eyebrow' }, '📝 ' + sectionTag + where),
+            el('div', { class: 'info-card-body' }, block.content),
+            el('div', { class: 'info-card-foot' }, 'Tap below when done reading.'),
+          );
+        } else if (rowMode) {
+          // Row mode: full-size big button, row info above
+          infoCard.style.display = 'none';
+          rowHead.style.display = '';
+          bigBtn.classList.remove('compact');
+        }
+
+        // Row head content (visible in row mode, marker mode, or done)
         clear(rowHead);
         if (done) {
           rowHead.append(
             el('div', { class: 'row-num' }, 'All rows complete'),
             el('div', { class: 'row-raw' }, project.name + ' — finished!')
           );
-        } else {
-          const row = parsed.rows[cur.rowIndex];
+        } else if (rowMode || markerMode) {
+          const row = block;
           const prog = C.rowProgress(cur, parsed);
-          const lastNum = parsed.rows[parsed.rows.length - 1].rowNumber;
+          const lastInSection = lastRowPerSection[row.section || ''];
+          const lastNum = lastInSection ? lastInSection.rowNumber : row.rowNumber;
           const rangeNote = row.rangeEnd && row.rangeEnd !== row.rangeStart
             ? ' (within ' + row.rangeStart + '–' + row.rangeEnd + ')' : '';
+          const sectionLabel = row.section ? el('div', { class: 'section-label' }, row.section) : null;
           rowHead.append(
+            sectionLabel,
             el('div', { class: 'row-num' },
               'Row ' + row.rowNumber,
               el('small', null, '/ ' + lastNum + rangeNote)
@@ -622,6 +819,8 @@
             el('div', { class: 'row-progress' }, prog.done + ' / ' + prog.total + ' stitches')
           );
         }
+
+        // Big button
         clear(bigBtn);
         if (done) {
           bigBtn.disabled = true;
@@ -632,7 +831,18 @@
           bigBtn.appendChild(el('div', { class: 'next-label' }, C.nextLabel(cur, parsed)));
           bigBtn.appendChild(el('div', { class: 'hint' }, 'Tap, or press Space / Enter'));
         }
-        undoBtn.disabled = (project.cursor.history.length === 0);
+        backBtn.disabled    = done || (cur.blockIndex === 0 && cur.stepIndex === 0 && !cur.markerPending);
+        undoBtn.disabled    = (cur.history.length === 0);
+        // Row-done only makes sense when standing on a row
+        nextRowBtn.disabled = !rowMode;
+      }
+
+      function sectionLastRowBefore(parsed, blockIndex, section) {
+        for (let i = blockIndex - 1; i >= 0; i--) {
+          const b = parsed.blocks[i];
+          if (b.type === 'row' && b.section === section) return b;
+        }
+        return null;
       }
 
       function flashPress() {
@@ -647,10 +857,16 @@
           fill.classList.add('pulse');
         }
       }
-      bigBtn.addEventListener('animationend', () => bigBtn.classList.remove('pressed'));
+      // Two animations run on .pressed: press-pulse (260ms) on the button,
+      // and ripple (360ms) on the ::before. Wait for the slower one so the
+      // ripple isn't killed mid-flight.
+      bigBtn.addEventListener('animationend', (e) => {
+        if (e.animationName === 'ripple') bigBtn.classList.remove('pressed');
+      });
 
       function doPress() {
-        const next = C.advance(project.cursor, parsed);
+        const opts = loadOptions();
+        const next = C.press(project.cursor, parsed, opts);
         if (next === project.cursor) return;
         project.cursor = next;
         paint();
@@ -664,6 +880,22 @@
         paint();
         saveProject(project);
       }
+      function doBack() {
+        const next = C.back(project.cursor, parsed);
+        if (next === project.cursor) return;
+        project.cursor = next;
+        paint();
+        saveProject(project);
+      }
+      function doSkipRow() {
+        if (C.isDone(project.cursor, parsed)) return;
+        const block = C.currentBlock(project.cursor, parsed);
+        if (!block || block.type !== 'row') return;  // only meaningful on a row
+        project.cursor = C.jumpTo(project.cursor, project.cursor.blockIndex + 1, 0);
+        paint();
+        flashPress();
+        saveProject(project);
+      }
 
       bigBtn.addEventListener('click', doPress);
 
@@ -675,6 +907,9 @@
         } else if (e.code === 'Backspace') {
           e.preventDefault();
           doUndo();
+        } else if (e.code === 'ArrowLeft') {
+          e.preventDefault();
+          doBack();
         }
       }
       document.addEventListener('keydown', onKey);
@@ -686,7 +921,9 @@
         el('button', { class: 'icon-btn', title: 'Menu', onclick: () => openMenu(project, parsed) }, '☰')
       );
       clear(app);
-      app.append(header, rowHead, bigBtn, actions);
+      // rowHead first so when both are shown (marker mode), row context appears
+      // above the call-to-action instruction.
+      app.append(header, rowHead, infoCard, bigBtn, actions);
       paint();
     }
 
@@ -712,28 +949,79 @@
     function jumpDialog(project, parsed) {
       const scrim = makeScrim();
       const close = () => document.body.removeChild(scrim);
-      const cur_num = parsed.rows[project.cursor.rowIndex]?.rowNumber || '';
-      const input = el('input', { type: 'text', placeholder: 'Row number', value: cur_num });
-      const min = parsed.rows[0]?.rowNumber;
-      const max = parsed.rows[parsed.rows.length - 1]?.rowNumber;
+
+      const sections = C.sectionsOf(parsed);
+      // Find the current row + section for sensible defaults
+      let curBlock = parsed.blocks[project.cursor.blockIndex];
+      let curRow = curBlock && curBlock.type === 'row' ? curBlock :
+                   (function () {
+                     for (let i = project.cursor.blockIndex - 1; i >= 0; i--) {
+                       if (parsed.blocks[i] && parsed.blocks[i].type === 'row') return parsed.blocks[i];
+                     }
+                     return null;
+                   })();
+      const defaultSection = curRow && curRow.section != null ? curRow.section : sections[0];
+      const defaultRowNum = curRow ? curRow.rowNumber : '';
+
+      function rowsInSection(sec) {
+        return parsed.blocks.filter(b => b.type === 'row' && (b.section || null) === (sec || null));
+      }
+
+      let sectionSelect = null;
+      let drawerContents = [];
+
+      if (sections.length > 1) {
+        sectionSelect = el('select');
+        for (const s of sections) {
+          const opt = document.createElement('option');
+          opt.value = s; opt.textContent = s;
+          if (s === defaultSection) opt.selected = true;
+          sectionSelect.appendChild(opt);
+        }
+        sectionSelect.style.cssText = 'width:100%; padding:12px; border-radius:8px; border:1px solid var(--card-hi); background:var(--card); color:var(--fg); font: inherit;';
+        drawerContents.push(el('div', { class: 'muted', style: 'font-size:13px' }, 'Section'), sectionSelect);
+      }
+
+      const input = el('input', { type: 'text', placeholder: 'Row number', value: defaultRowNum });
+      function sectionRowsInfo() {
+        const sec = sectionSelect ? sectionSelect.value : (sections[0] || null);
+        const rows = rowsInSection(sec);
+        if (!rows.length) return '';
+        return 'Rows ' + rows[0].rowNumber + '–' + rows[rows.length - 1].rowNumber +
+               (sec ? ' in ' + sec : '');
+      }
+      const hint = el('div', { class: 'muted', style: 'font-size:13px' }, sectionRowsInfo());
+      if (sectionSelect) sectionSelect.addEventListener('change', () => { hint.textContent = sectionRowsInfo(); });
+
       function go() {
+        const sec = sectionSelect ? sectionSelect.value : (sections[0] !== undefined ? sections[0] : null);
         const target = parseInt(input.value, 10);
-        const idx = parsed.rows.findIndex(r => r.rowNumber === target);
-        if (idx < 0) { alert('No row ' + target + ' in this pattern.'); return; }
+        if (isNaN(target)) { alert('Enter a row number.'); return; }
+        const idx = parsed.blocks.findIndex(b =>
+          b.type === 'row' && b.rowNumber === target && (b.section || null) === (sec || null));
+        if (idx < 0) {
+          alert('No row ' + target + (sec ? ' in section "' + sec + '"' : '') + '.');
+          return;
+        }
         project.cursor = C.jumpTo(project.cursor, idx, 0);
         saveProject(project);
         close();
         renderTracker(project.id);
       }
-      const drawer = el('div', { class: 'drawer' },
-        el('h3', null, 'Jump to row'),
-        el('div', { class: 'muted' }, 'Pattern covers rows ' + min + '–' + max + '.'),
+
+      drawerContents.push(
+        el('div', { class: 'muted', style: 'font-size:13px' }, 'Row number'),
         input,
+        hint,
         el('div', { class: 'row' },
           el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
           el('div', { style: 'flex:1' }),
           el('button', { class: 'btn', onclick: go }, 'Jump')
         )
+      );
+      const drawer = el('div', { class: 'drawer' },
+        el('h3', null, 'Jump to row'),
+        ...drawerContents
       );
       scrim.appendChild(drawer);
       document.body.appendChild(scrim);
@@ -756,11 +1044,11 @@
           return;
         }
         const oldParsed = C.parsePattern(project.rawText);
-        const oldRow = oldParsed.rows[project.cursor.rowIndex];
-        const newRow = parsed.rows[project.cursor.rowIndex];
-        const rowChanged = !oldRow || !newRow || oldRow.rawLine !== newRow.rawLine;
-        const stepOOB = newRow && project.cursor.stepIndex > newRow.pressSteps.length;
-        if (rowChanged || stepOOB) {
+        const oldBlock = oldParsed.blocks[project.cursor.blockIndex];
+        const newBlock = parsed.blocks[project.cursor.blockIndex];
+        const blockChanged = !oldBlock || !newBlock || oldBlock.rawLine !== newBlock.rawLine;
+        const stepOOB = newBlock && project.cursor.stepIndex > newBlock.pressSteps.length;
+        if (blockChanged || stepOOB) {
           if (!confirm('The current row changed; position will reset to the start. Continue?')) return;
           project.cursor = C.initialState();
         }
@@ -1044,6 +1332,43 @@
       );
     }
 
+    // ---- View: options ----
+    function renderSettings() {
+      const header = el('header', null,
+        el('button', { class: 'icon-btn', onclick: () => navigate('#/') }, '←'),
+        el('h1', null, 'Options')
+      );
+
+      function toggleRow(key, label, hint) {
+        const opts = loadOptions();
+        const checkbox = el('input', { type: 'checkbox' });
+        checkbox.checked = !!opts[key];
+        checkbox.addEventListener('change', () => {
+          const o = loadOptions();
+          o[key] = checkbox.checked;
+          saveOptions(o);
+        });
+        return el('div', { class: 'option-row' },
+          el('label', null,
+            checkbox,
+            el('div', null,
+              el('div', null, label),
+              el('div', { class: 'option-hint' }, hint),
+            ),
+          ),
+        );
+      }
+
+      clear(app);
+      app.append(header, el('div', { class: 'stack' },
+        toggleRow(
+          'stitchMarker',
+          '🔖 Stitch marker reminders',
+          'After the first stitch of each row, show a banner reminding you to place a stitch marker. Tap the banner to dismiss.'
+        ),
+      ));
+    }
+
     // ---- URL key import (one-shot, on first load) ----
     function maybeImportFromURL() {
       const u = new URL(location.href);
@@ -1076,6 +1401,7 @@
       if (h === '#/' || h === '#' || h === '') renderList();
       else if (h === '#/new') renderNew();
       else if (h === '#/sync') renderSync();
+      else if (h === '#/settings') renderSettings();
       else if (h.startsWith('#/p/')) renderTracker(h.slice(4));
       else navigate('#/');
     }
