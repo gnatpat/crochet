@@ -78,6 +78,54 @@
     eq(warnings.length, 0, 'dec group: no warnings');
   }
 
+  // ---- blo / flo modifier ----
+
+  {
+    const { rows, errors, warnings } = C.parsePattern('1: 3 sc blo, dec blo (4)');
+    eq(errors.length, 0, 'blo modifier: no errors');
+    eq(warnings.length, 0, 'blo modifier: no warnings');
+    const steps = rows[0].pressSteps;
+    eq(steps.length, 4, 'blo: 3 sc + 1 dec = 4 presses');
+    eq(steps[0].label, 'sc (blo)', 'sc blo label');
+    eq(steps[0].modifier, 'blo', 'sc blo modifier attr');
+    eq(steps[0].outputDelta, 1, 'sc blo still outputs 1');
+    eq(steps[3].label, 'dec (blo)', 'dec blo label');
+    eq(steps[3].modifier, 'blo', 'dec blo modifier');
+  }
+  {
+    // Group with blo'd stitches; modifier survives group expansion
+    const { rows } = C.parsePattern('1: [3 sc blo, dec blo] x 6 (24)');
+    const steps = rows[0].pressSteps;
+    eq(steps.length, 24, 'group blo: 6 * (3+1) = 24 presses');
+    eq(steps.every(s => s.modifier === 'blo'), true, 'all steps carry blo modifier');
+  }
+  {
+    const { rows } = C.parsePattern('1: 6 sc flo (6)');
+    eq(rows[0].pressSteps[0].modifier, 'flo', 'flo modifier');
+    eq(rows[0].pressSteps[0].label, 'sc (flo)', 'flo label');
+  }
+
+  // ---- turn / tch ----
+
+  {
+    const { rows, errors, warnings } = C.parsePattern('2: 30 sc, tch 1, turn (30)');
+    eq(errors.length, 0, 'tch + turn: no errors');
+    eq(warnings.length, 0, 'tch + turn: no warnings (both 0-output)');
+    const steps = rows[0].pressSteps;
+    eq(steps.length, 32, '30 sc + 1 tch + 1 turn = 32 presses');
+    eq(steps[30].stitch, 'tch', 'second-to-last step is tch');
+    eq(steps[30].outputDelta, 0, 'tch outputs 0');
+    eq(steps[31].stitch, 'turn', 'last step is turn');
+    eq(steps[31].outputDelta, 0, 'turn outputs 0');
+  }
+  {
+    // Starting chain still counts as 1-output each
+    const { rows, warnings } = C.parsePattern('1: ch 31 (31)');
+    eq(warnings.length, 0, 'starting chain: no warnings');
+    eq(rows[0].pressSteps.length, 31, '31 ch presses');
+    eq(rows[0].pressSteps.every(s => s.stitch === 'ch' && s.outputDelta === 1), true, 'ch is 1-output');
+  }
+
   // ---- "in MR" suffix ----
 
   {

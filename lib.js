@@ -10,9 +10,14 @@
     'inc':   { presses: 2, outputDelta: [1, 1], labels: ['inc (1/2)', 'inc (2/2)'] },
     'dec':   { presses: 1, outputDelta: [1],    labels: ['dec'] },
     'ch':    { presses: 1, outputDelta: [1],    labels: ['ch'] },
+    // Turning chain: physically a chain, but conventionally NOT counted in
+    // the row's stitch total. AI converter emits this at the end of flat rows.
+    'tch':   { presses: 1, outputDelta: [0],    labels: ['turning ch'] },
     'sl st': { presses: 1, outputDelta: [1],    labels: ['sl st'] },
     'mr':    { presses: 1, outputDelta: [0],    labels: ['MR (form magic ring)'] },
     'fo':    { presses: 1, outputDelta: [0],    labels: ['FO (fasten off)'] },
+    // Flip the work — used between rows in flat patterns.
+    'turn':  { presses: 1, outputDelta: [0],    labels: ['↩ turn the work'] },
   };
 
   function normalizeStitchName(s) {
@@ -226,22 +231,44 @@
       inMR = true;
       text = mrMatch[1].trim();
     }
-    const stitchMatch = text.match(/^(?:(\d+)\s*)?(sl\s*st|sc|inc|dec|ch|mr|fo)$/i);
-    if (!stitchMatch) {
-      throw new Error('Unknown instruction: "' + text + '"');
+    // Trailing modifier: blo (back loop only) or flo (front loop only).
+    let modifier = null;
+    const modMatch = text.match(/^(.+?)\s+(blo|flo)\s*$/i);
+    if (modMatch) {
+      modifier = modMatch[2].toLowerCase();
+      text = modMatch[1].trim();
     }
-    const count = stitchMatch[1] ? parseInt(stitchMatch[1], 10) : 1;
-    const stitch = normalizeStitchName(stitchMatch[2]);
-    return { type: 'stitch', stitch, count, inMR };
+    // Accept "N stitch" (e.g. "28 sc") or "stitch N" (e.g. "ch 31") or just "stitch".
+    const STITCH_RE = /(sl\s*st|sc|inc|dec|ch|tch|mr|fo|turn)/i;
+    let count = 1;
+    let stitchSrc;
+    let m1 = text.match(new RegExp('^(?:(\\d+)\\s*)?' + STITCH_RE.source + '$', 'i'));
+    if (m1) {
+      if (m1[1] != null) count = parseInt(m1[1], 10);
+      stitchSrc = m1[2];
+    } else {
+      const m2 = text.match(new RegExp('^' + STITCH_RE.source + '(?:\\s+(\\d+))?$', 'i'));
+      if (!m2) throw new Error('Unknown instruction: "' + text + '"');
+      stitchSrc = m2[1];
+      if (m2[2] != null) count = parseInt(m2[2], 10);
+    }
+    const stitch = normalizeStitchName(stitchSrc);
+    return { type: 'stitch', stitch, count, inMR, modifier };
   }
 
   // ---- Row expansion ----
 
-  function makeStitchSteps(stitch) {
+  function makeStitchSteps(stitch, modifier) {
     const info = STITCH_INFO[stitch];
     const steps = [];
+    const suffix = modifier ? ' (' + modifier + ')' : '';
     for (let i = 0; i < info.presses; i++) {
-      steps.push({ stitch, label: info.labels[i], outputDelta: info.outputDelta[i] });
+      steps.push({
+        stitch,
+        label: info.labels[i] + suffix,
+        outputDelta: info.outputDelta[i],
+        modifier: modifier || null,
+      });
     }
     return steps;
   }
@@ -252,14 +279,16 @@
       if (inst.type === 'group') {
         const inner = expandInstructions(inst.instructions);
         for (let i = 0; i < inst.repeat; i++) {
-          for (const s of inner) steps.push({ stitch: s.stitch, label: s.label, outputDelta: s.outputDelta });
+          for (const s of inner) steps.push({
+            stitch: s.stitch, label: s.label, outputDelta: s.outputDelta, modifier: s.modifier || null,
+          });
         }
       } else {
         if (inst.inMR) {
-          steps.push({ stitch: 'mr', label: STITCH_INFO.mr.labels[0], outputDelta: 0 });
+          steps.push({ stitch: 'mr', label: STITCH_INFO.mr.labels[0], outputDelta: 0, modifier: null });
         }
         for (let i = 0; i < inst.count; i++) {
-          for (const s of makeStitchSteps(inst.stitch)) steps.push(s);
+          for (const s of makeStitchSteps(inst.stitch, inst.modifier)) steps.push(s);
         }
       }
     }
