@@ -14,6 +14,9 @@
     // the row's stitch total. AI converter emits this at the end of flat rows.
     'tch':   { presses: 1, outputDelta: [0],    labels: ['turning ch'] },
     'sl st': { presses: 1, outputDelta: [1],    labels: ['sl st'] },
+    // Joining slip stitch used to close a round ("sl st in first sc to join").
+    // 0-output so the round's stitch total still matches the source.
+    'join':  { presses: 1, outputDelta: [0],    labels: ['↻ sl st (join)'] },
     'mr':    { presses: 1, outputDelta: [0],    labels: ['MR (form magic ring)'] },
     'fo':    { presses: 1, outputDelta: [0],    labels: ['FO (fasten off)'] },
     // Flip the work — used between rows in flat patterns.
@@ -239,7 +242,7 @@
       text = modMatch[1].trim();
     }
     // Accept "N stitch" (e.g. "28 sc") or "stitch N" (e.g. "ch 31") or just "stitch".
-    const STITCH_RE = /(sl\s*st|sc|inc|dec|ch|tch|mr|fo|turn)/i;
+    const STITCH_RE = /(sl\s*st|join|sc|inc|dec|ch|tch|mr|fo|turn)/i;
     let count = 1;
     let stitchSrc;
     let m1 = text.match(new RegExp('^(?:(\\d+)\\s*)?' + STITCH_RE.source + '$', 'i'));

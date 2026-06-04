@@ -105,6 +105,22 @@
     eq(rows[0].pressSteps[0].label, 'sc (flo)', 'flo label');
   }
 
+  // ---- join (slip-stitch round join) ----
+
+  {
+    const { rows, errors, warnings } = C.parsePattern('1: 8 sc in MR, join, tch 1 (8)');
+    eq(errors.length, 0, 'join: no errors');
+    eq(warnings.length, 0, 'join: no warnings (join+tch are both 0-output)');
+    const steps = rows[0].pressSteps;
+    // MR + 8 sc + join + tch = 11 presses; output = 8
+    eq(steps.length, 11, 'join: 11 presses (MR + 8 sc + join + tch)');
+    eq(steps[9].stitch, 'join', 'second-to-last is join');
+    eq(steps[9].outputDelta, 0, 'join outputs 0');
+    eq(steps[10].stitch, 'tch', 'last is tch');
+    const total = steps.reduce((a, s) => a + s.outputDelta, 0);
+    eq(total, 8, 'total output = 8');
+  }
+
   // ---- turn / tch ----
 
   {

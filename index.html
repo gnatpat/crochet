@@ -277,44 +277,100 @@
     function saveLlmCfg(c) { localStorage.setItem(LLM_KEY, JSON.stringify(c)); }
     const DEFAULT_LLM_MODEL = 'anthropic/claude-haiku-4.5';
     const CONVERT_PROMPT = [
-      "You convert crochet patterns from natural language into a strict DSL. Output ONLY the DSL — no commentary, no markdown fences, no preamble.",
+      "You convert a crochet pattern from natural language into a strict DSL. Output ONLY the DSL — no commentary, no markdown fences, no preamble.",
       "",
-      "DSL syntax:",
-      "  Row:       <row-or-range>: <instructions> (<total-stitches>)",
-      "  Section:   [SECTION NAME]                    (header on its own line)",
-      "  Note:      note: short single-line text",
-      "  Note:      note: \"\"\"                         (multi-line; close with \"\"\" on its own line)",
-      "             ...content...",
-      "             \"\"\"",
+      "============================================================",
+      "DSL GRAMMAR — the ONLY constructs you may emit",
+      "============================================================",
       "",
-      "Row rules:",
-      "  - Row range: \"7-9: ...\" applies to rows 7, 8, and 9.",
-      "  - Stitch tokens (case-insensitive): sc, inc, dec, ch, tch (turning chain), sl st, MR, FO, turn.",
-      "  - Counts: \"28 sc\" or \"sc 28\" or \"ch 31\" — count can come before or after.",
-      "  - Repeated groups: \"[6 sc, inc] x 4\" means do (6 sc + inc) four times.",
-      "  - Magic ring: use \"in MR\" suffix, e.g. \"6 sc in MR\".",
-      "  - Back/front loop only: suffix \"blo\" or \"flo\" after a stitch, e.g. \"sc blo\", \"dec flo\".",
-      "  - Flat patterns: at the end of each row write \"tch 1, turn\" for the turning chain + flip. `tch` is 0-output so the row total still matches the source.",
-      "  - The trailing \"(N)\" is the total stitch count for that row (NOT counting tch or turn).",
-      "  - Row numbering resets per section.",
+      "Each line is either blank, a section header, a note, or a row.",
       "",
-      "Notes capture free text that the user needs to acknowledge at a point in the pattern: tips, stuffing instructions, fasten-off directions, color changes, etc. Use single-line `note:` for short reminders and `note: \"\"\"...\"\"\"` for multi-paragraph instructions.",
+      "  Section header:   [SECTION NAME]",
+      "  Note (1 line):    note: short text",
+      "  Note (multi):     note: \"\"\"",
+      "                    ...paragraph(s)...",
+      "                    \"\"\"",
+      "  Row:              <N>: <inst-list> (<count>)",
+      "  Row range:        <N>-<M>: <inst-list> (<count>)",
       "",
-      "Natural-language mapping:",
-      "  - \"Round N\" / \"Rnd N\" / \"R N\"  ->  \"N:\"",
-      "  - \"Rounds N-M\" / \"Rnds N-M\"   ->  \"N-M:\"",
-      "  - \"magic ring\" / \"magic loop\"  ->  \"in MR\"",
-      "  - \"increase\" / \"2 sc in next st\" / \"inc\"  ->  \"inc\"",
-      "  - \"decrease\" / \"sc2tog\" / \"invisible decrease\" / \"dec\"  ->  \"dec\"",
-      "  - \"fasten off\" / \"FO\"  ->  \"FO\"",
-      "  - \"single crochet\" / \"sc\"  ->  \"sc\"",
-      "  - \"Ch N and turn\" / \"chain N, turn\" (end of flat row)  ->  \"tch N, turn\"",
-      "  - \"back loops only\" / \"blo\"  ->  suffix \"blo\" on the stitch (e.g. \"sc blo\")",
-      "  - \"front loops only\" / \"flo\"  ->  suffix \"flo\" on the stitch",
-      "  - Yarn color hints like \"(white yarn)\" / \"with green yarn\" / \"switch to red yarn\"  ->  positional `note:` lines, e.g. `note: Switch to red yarn.`",
-      "  - Patterns often have a part name in ALL CAPS like \"HEAD & BODY\" followed by rounds. Treat the part name as a section: `[HEAD & BODY]`. The next part name starts a new section.",
-      "  - If round numbers are listed in a column then the actual stitches below, align them in order.",
-      "  - Lines beginning with \"TIP\", \"Stuff the piece\", \"Fasten off\", or similar are notes — capture them with `note:`.",
+      "An <inst-list> is a comma-separated list of instructions. Each instruction is one of:",
+      "",
+      "  <count> <stitch>           e.g. \"6 sc\", \"30 sc\", \"3 sc\"",
+      "  <stitch> <count>           e.g. \"ch 31\", \"tch 1\"   (count can be on either side)",
+      "  <stitch>                   e.g. \"inc\", \"dec\", \"join\", \"turn\"  (count defaults to 1)",
+      "  <stitch> blo               back-loop-only variant, e.g. \"sc blo\", \"dec blo\"",
+      "  <stitch> flo               front-loop-only variant",
+      "  <stitch group> in MR       stitches worked into a magic ring, e.g. \"6 sc in MR\"",
+      "  [<inst-list>] x <K>        repeated group, e.g. \"[3 sc, inc] x 6\"",
+      "",
+      "<stitch> is EXACTLY one of the tokens in the table below (case-insensitive).",
+      "NO other tokens are allowed inside a row. Anything else must become a `note:`.",
+      "",
+      "  TOKEN  | OUTPUT | MEANING",
+      "  -------|--------|----------------------------------------------------",
+      "  sc     |   1    | single crochet",
+      "  inc    |   2    | increase (2 sc in one stitch; takes 2 presses)",
+      "  dec    |   1    | decrease / sc2tog (2 stitches merged into 1)",
+      "  ch     |   1    | chain — counts as a stitch (use for starting chains)",
+      "  tch    |   0    | turning chain — NOT counted in row total",
+      "  sl st  |   1    | regular slip stitch",
+      "  join   |   0    | joining slip stitch closing a round",
+      "         |        |   (matches 'sl st in first sc to join')",
+      "  MR     |   0    | form a magic ring (or use \"in MR\" suffix)",
+      "  FO     |   0    | fasten off",
+      "  turn   |   0    | turn / flip the work (between flat-pattern rows)",
+      "",
+      "The trailing \"(N)\" on a row is the source pattern's stated stitch total.",
+      "It MUST equal the sum of the OUTPUT-column values for every token in the row.",
+      "tch, join, turn, MR, FO contribute 0 and therefore do NOT affect (N).",
+      "",
+      "Row numbering RESETS to 1 at the start of each new section.",
+      "",
+      "============================================================",
+      "TRANSLATION RULES — source phrase  ->  DSL",
+      "============================================================",
+      "",
+      "  \"Round N\" / \"Rnd N\" / \"R N\"                            ->  \"N:\"",
+      "  \"Rounds N-M\" / \"Rnds N-M\"                              ->  \"N-M:\"",
+      "  \"single crochet\" / \"sc\"                                ->  \"sc\"",
+      "  \"1 sc in next N sts\" / \"1sc in N sts\" / \"sc in next N\" ->  \"N sc\"",
+      "  \"1 sc in each st (around)\"                             ->  \"<row total> sc\"",
+      "  \"2 sc in next st\" / \"2sc in same st\" / \"increase\"      ->  \"inc\"",
+      "  \"2 sc in each st around\" (prev row has K sts)          ->  \"K inc\"",
+      "  \"sc2tog\" / \"sc 2 together\" / \"decrease\" / \"invisible dec\"  ->  \"dec\"",
+      "  \"magic ring\" / \"magic circle\" / \"magic loop\" / \"chain N loop\" / \"MC\"  ->  \"in MR\"",
+      "  \"sl st in first sc to join\" / \"join with sl st\"        ->  \"join\"",
+      "  \"back loops only\" / \"BLO\" / \"in the back loops\"        ->  suffix \"blo\"",
+      "  \"front loops only\" / \"FLO\"                             ->  suffix \"flo\"",
+      "  \"ch N (do not count as a st)\" / \"Ch N and turn\"        ->  \"tch N\" (add \", turn\" if flipping)",
+      "  \"chain N\" at the start of a flat piece (counts as sts) ->  \"ch N\"  (N becomes the row total)",
+      "  \"fasten off\" / \"FO and weave in\"                       ->  `note: ...` paragraph",
+      "  ALL-CAPS part name on its own line                     ->  `[NAME]` section header",
+      "  \"(white yarn)\" / \"with white yarn\" / \"switch to red\"   ->  `note: Use white yarn.` etc.",
+      "  Paragraphs (TIPs, stuffing, fasten-off, etc.)          ->  `note:` (single-line) or `note: \"\"\"...\"\"\"` (multi-line)",
+      "  Round numbers listed above the instructions in a column ->  pair them up in order",
+      "",
+      "============================================================",
+      "MANDATORY TRANSLATION DISCIPLINE",
+      "============================================================",
+      "",
+      "1. NEVER copy English prose into a row. Inside a row you may emit ONLY the tokens in the",
+      "   grammar table. Move every prose phrase to a `note:` line.",
+      "2. DROP boilerplate phrases that don't change the stitch sequence:",
+      "     \"in first 3 sts\", \"in next 3 sts\", \"in last st\", \"in each st around\", \"to join\",",
+      "     \"here and throughout\", \"around\", \"in same st\".",
+      "   Use the count (\"3 sts\", \"each st\") instead.",
+      "3. CONVERT positional descriptions to counts. Example:",
+      "     \"1sc in first 3 sts, 2sc in next st, 1sc in next 3 sts, 2sc in last st\"",
+      "     ->  \"3 sc, inc, 3 sc, inc\"",
+      "4. Every round that says \"sl st in first sc to join\" gets a `join` token at the end of",
+      "   that row's instructions. If the round also says \"Ch1\" or \"Ch 1\" after the join, append",
+      "   \", tch 1\" too.",
+      "5. RECOGNIZE every increase synonym (\"inc\", \"2sc in next st\", \"2sc in same st\") and every",
+      "   decrease synonym (\"dec\", \"sc2tog\", \"sc 2 together\", \"invisible dec\").",
+      "6. CHECK the (N) at the end of each row equals the sum of OUTPUT-column values for the",
+      "   row's tokens. If it doesn't, you've left something un-translated — fix it.",
+      "7. NEVER invent stitch tokens. The grammar table is exhaustive.",
       "",
       "Example:",
       "",
@@ -353,7 +409,13 @@
       "1: 6 sc in MR (6)",
       "2: 6 inc (12)",
       "",
-      "Flat-pattern example (notice tch + turn at end of each row, blo modifier on row 3):",
+      "============================================================",
+      "WORKED EXAMPLE 1 — amigurumi spiral (see above for full output)",
+      "============================================================",
+      "",
+      "============================================================",
+      "WORKED EXAMPLE 2 — flat pattern (notice tch + turn at end of each row, blo modifier on row 3)",
+      "============================================================",
       "",
       "Input:",
       "CLOAK",
@@ -374,11 +436,84 @@
       "3: [3 sc blo, dec blo] x 6, tch 1, turn (24)",
       "note: Fasten off and weave in the tails.",
       "",
+      "============================================================",
+      "WORKED EXAMPLE 3 — joined rounds (notice `join` + `tch 1` at the end of each round,",
+      "verbose positional prose collapsed to counts, sc2tog -> dec, prose -> notes)",
+      "============================================================",
+      "",
+      "Input:",
+      "Mushroom Top",
+      "",
+      "Round 1",
+      "Using red or brown yarn crochet 8sc into a chain 4 loop or magic circle, sl st in first sc to join - (8) Ch1 (do not count as a st here or throughout)",
+      "",
+      "Round 2",
+      "2sc in each st around, sl st in first sc to join - (16) Ch1",
+      "",
+      "Round 3",
+      "1sc in each st around, sl st in first sc to join - (16) Ch1",
+      "",
+      "Round 4",
+      "1sc in each st around, sl st in first sc to join - (16)",
+      "",
+      "Fasten off, leaving a long tail for sewing. Using white yarn, add knots to make mushroom spots and hide the tails on the inside. Do not stuff!",
+      "",
+      "Mushroom Bottom",
+      "",
+      "Round 1",
+      "Using white yarn crochet 8sc into a chain 4 loop or magic circle, sl st in first sc to join - (8) Ch1",
+      "",
+      "Round 2",
+      "1sc in first 3 sts, 2sc in next st, 1sc in next 3 sts, 2sc in last st, sl st in first sc to join - (10) Ch1",
+      "",
+      "Rounds 3 - 4",
+      "1sc in each st around, sl st in first sc to join - (10) Ch1",
+      "",
+      "Round 5",
+      "1sc in first 3 sts, sc2tog, 1 sc in next 3 sts, sc2tog, sl st in first sc to join - (8) Ch1",
+      "",
+      "Output:",
+      "[MUSHROOM TOP]",
+      "note: Use red or brown yarn.",
+      "note: The Ch1 at the end of each round does NOT count as a stitch (here and throughout).",
+      "1: 8 sc in MR, join, tch 1 (8)",
+      "2: 8 inc, join, tch 1 (16)",
+      "3: 16 sc, join, tch 1 (16)",
+      "4: 16 sc, join (16)",
+      "note: \"\"\"",
+      "Fasten off, leaving a long tail for sewing. Using white yarn, add knots to make mushroom spots and hide the tails on the inside. Do not stuff!",
+      "\"\"\"",
+      "",
+      "[MUSHROOM BOTTOM]",
+      "note: Use white yarn.",
+      "1: 8 sc in MR, join, tch 1 (8)",
+      "2: 3 sc, inc, 3 sc, inc, join, tch 1 (10)",
+      "3-4: 10 sc, join, tch 1 (10)",
+      "5: 3 sc, dec, 3 sc, dec, join, tch 1 (8)",
+      "",
+      "============================================================",
+      "Now convert the user's pattern below. Output ONLY the DSL.",
+      "============================================================",
+      "",
       "Pattern to convert:",
       "",
     ].join('\n');
 
-    async function llmConvert(rawText, key, model) {
+    async function llmConvert(rawText, key, model, thinking) {
+      const body = {
+        model: model || DEFAULT_LLM_MODEL,
+        messages: [{ role: 'user', content: CONVERT_PROMPT + rawText }],
+        temperature: 0,
+        max_tokens: 4000,
+      };
+      // OpenRouter `reasoning` param: gives the model a scratchpad on supported
+      // models (Anthropic Claude, OpenAI o-series, etc.). The thinking lands in
+      // a separate channel so it doesn't pollute the DSL output we read from
+      // `content`. Defaults to "low" effort — small cost bump, useful quality
+      // gain on verbose pattern conversions.
+      if (thinking !== false) {
+        body.reasoning = { effort: 'low' };
+      }
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -387,12 +522,7 @@
           'HTTP-Referer': location.origin === 'null' ? 'https://crochet.local/' : location.origin,
           'X-Title': 'Crochet tracker',
         },
-        body: JSON.stringify({
-          model: model || DEFAULT_LLM_MODEL,
-          messages: [{ role: 'user', content: CONVERT_PROMPT + rawText }],
-          temperature: 0,
-          max_tokens: 4000,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const t = await res.text().catch(() => '');
@@ -1117,6 +1247,22 @@
         keyInput,
         el('div', { class: 'muted', style: 'font-size:13px;margin-top:4px' }, 'Model (optional)'),
         modelInput,
+        el('div', { class: 'muted', style: 'font-size:12px' },
+          'Default ' + DEFAULT_LLM_MODEL + ' is fast and cheap. For verbose / unusual patterns ' +
+          'that the default struggles with, try ',
+          (function () {
+            const a = el('a', { href: '#', style: 'color: var(--accent); text-decoration: underline' }, 'anthropic/claude-sonnet-4.6');
+            a.onclick = (e) => { e.preventDefault(); modelInput.value = 'anthropic/claude-sonnet-4.6'; };
+            return a;
+          })(),
+          ' or ',
+          (function () {
+            const a = el('a', { href: '#', style: 'color: var(--accent); text-decoration: underline' }, 'anthropic/claude-opus-4.7');
+            a.onclick = (e) => { e.preventDefault(); modelInput.value = 'anthropic/claude-opus-4.7'; };
+            return a;
+          })(),
+          '.',
+        ),
       );
       const editKeyBtn = el('button', { class: 'btn secondary', onclick: () => {
         keyInput.value = llm.key || '';
@@ -1139,6 +1285,21 @@
       }
       refreshKeyUI();
 
+      // Extended thinking toggle (defaults on)
+      const thinkingCheckbox = el('input', { type: 'checkbox' });
+      thinkingCheckbox.checked = (llm.thinking !== false);
+      thinkingCheckbox.addEventListener('change', () => {
+        const c = loadLlmCfg();
+        c.thinking = thinkingCheckbox.checked;
+        saveLlmCfg(c);
+      });
+      const thinkingRow = el('label', {
+        style: 'display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted);cursor:pointer',
+      },
+        thinkingCheckbox,
+        el('span', null, 'Use extended thinking — small cost bump, better on verbose patterns.'),
+      );
+
       let busy = false;
       const convertBtn = el('button', { class: 'btn' }, 'Convert');
       async function go() {
@@ -1148,7 +1309,8 @@
           const k = keyInput.value.trim();
           const m = modelInput.value.trim();
           if (!k) { status.textContent = 'Enter your OpenRouter key first.'; return; }
-          saveLlmCfg({ key: k, model: m });
+          const prev = loadLlmCfg();
+          saveLlmCfg({ key: k, model: m, thinking: prev.thinking !== false });
           refreshKeyUI();
         }
         llm = loadLlmCfg();
@@ -1156,9 +1318,9 @@
         if (!rawText) { status.textContent = 'Paste a pattern to convert.'; raw.focus(); return; }
         busy = true;
         convertBtn.disabled = true;
-        status.textContent = 'Converting…';
+        status.textContent = (llm.thinking !== false) ? 'Converting (with thinking)…' : 'Converting…';
         try {
-          const out = await llmConvert(rawText, llm.key, llm.model);
+          const out = await llmConvert(rawText, llm.key, llm.model, llm.thinking !== false);
           targetTextarea.value = out;
           targetTextarea.dispatchEvent(new Event('input'));
           close();
@@ -1167,7 +1329,7 @@
           status.textContent = msg;
           if (/401|403|invalid|unauthorized/i.test(msg)) {
             // Probably a bad key — show the input again
-            saveLlmCfg({ model: llm.model || '' });
+            saveLlmCfg({ model: llm.model || '', thinking: llm.thinking !== false });
             refreshKeyUI();
             keyInput.value = '';
           }
@@ -1186,6 +1348,7 @@
         keyStatus,
         editKeyBtn,
         keyRow,
+        thinkingRow,
         status,
         el('div', { class: 'row' },
           el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
