@@ -8,16 +8,10 @@
   //
   // Two orthogonal concepts:
   //   HEIGHTS  — base stitches (sc, hdc, dc, tr, dtr). All are structurally
-  //              identical: 1 press, +1 output when plain. Only the label
-  //              differs. Increases/decreases are applied as an operation.
+  //              identical: 1 press, +1 output when plain. They differ only by
+  //              token name. Increases/decreases are applied as an operation.
   //   SPECIALS — non-height tokens with fixed press/output behavior.
-  const HEIGHTS = {
-    'sc':  'sc',
-    'hdc': 'hdc',
-    'dc':  'dc',
-    'tr':  'tr',
-    'dtr': 'dtr',
-  };
+  const HEIGHTS = new Set(['sc', 'hdc', 'dc', 'tr', 'dtr']);
 
   const SPECIALS = {
     'ch':    { presses: 1, outputDelta: [1], labels: ['ch'] },
@@ -261,13 +255,17 @@
     let m = text.match(new RegExp('^(?:(\\d+)\\s*)?' + HEIGHT + '(\\d+)tog$', 'i'));
     if (m) {
       if (m[1] != null) count = parseInt(m[1], 10);
-      return { type: 'stitch', stitch: m[2].toLowerCase(), op: { kind: 'dec', mult: parseInt(m[3], 10) }, count, inMR, modifier };
+      const mult = parseInt(m[3], 10);
+      if (mult < 2) throw new Error('Unknown instruction: "' + text + '"');
+      return { type: 'stitch', stitch: m[2].toLowerCase(), op: { kind: 'dec', mult }, count, inMR, modifier };
     }
 
     // 2. Word-form operation: "dc inc", "dc inc5", "dc dec3", bare "inc"/"dec", "6 inc".
     m = text.match(/^(?:(.+?)\s+)?(inc|dec)(\d+)?$/i);
     if (m) {
-      op = { kind: m[2].toLowerCase(), mult: m[3] != null ? parseInt(m[3], 10) : 2 };
+      const mult = m[3] != null ? parseInt(m[3], 10) : 2;
+      if (mult < 2) throw new Error('Unknown instruction: "' + text + '"');
+      op = { kind: m[2].toLowerCase(), mult };
       const rest = (m[1] || '').trim();
       // Remainder is an optional count + optional height (height defaults to sc).
       const hm = rest.match(new RegExp('^(?:(\\d+)\\s*)?' + HEIGHT + '?$', 'i'));
@@ -318,9 +316,8 @@
     }
 
     // Height tokens.
-    const heightLabel = HEIGHTS[stitch];
     if (!op) {
-      return [{ stitch, label: heightLabel + suffix, outputDelta: 1, modifier: mod }];
+      return [{ stitch, label: stitch + suffix, outputDelta: 1, modifier: mod }];
     }
     if (op.kind === 'dec') {
       // "dec" stays the legacy sc-2-together label; everything else is Ntog.

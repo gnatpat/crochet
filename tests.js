@@ -512,6 +512,36 @@
     eq(warnings.length, 0, 'mixed: declared total matches, no warnings');
   }
 
+  // ---- flo modifier on an increase ----
+
+  {
+    const { rows } = C.parsePattern('1: dc inc flo (2)');
+    const s = rows[0].pressSteps;
+    eq(s.length, 2, 'dc inc flo: 2 presses');
+    eq([s[0].label, s[1].label], ['dc inc (1/2) (flo)', 'dc inc (2/2) (flo)'], 'dc inc flo: leg labels carry flo');
+    eq(s.every(x => x.modifier === 'flo'), true, 'dc inc flo: modifier carried on every leg');
+  }
+
+  // ---- word-form decrease (distinct code path from Ntog) ----
+
+  {
+    const { rows } = C.parsePattern('1: dc dec, dc dec3 (2)');
+    const s = rows[0].pressSteps;
+    eq([s[0].label, s[1].label], ['dc2tog', 'dc3tog'], 'word-form dec: dc dec -> dc2tog, dc dec3 -> dc3tog');
+    eq(s.reduce((a, x) => a + x.outputDelta, 0), 2, 'word-form dec: output 2');
+  }
+
+  // ---- degenerate multiplicity is rejected ----
+
+  {
+    const { errors } = C.parsePattern('1: dc inc1 (1)');
+    eq(errors.length >= 1, true, 'dc inc1: rejected as a parse error');
+  }
+  {
+    const { errors } = C.parsePattern('1: dc1tog (1)');
+    eq(errors.length >= 1, true, 'dc1tog: rejected as a parse error');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;
