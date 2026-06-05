@@ -4,23 +4,34 @@
 (function (root) {
   'use strict';
 
-  // ---- Stitch table ----
-  const STITCH_INFO = {
-    'sc':    { presses: 1, outputDelta: [1],    labels: ['sc'] },
-    'inc':   { presses: 2, outputDelta: [1, 1], labels: ['inc (1/2)', 'inc (2/2)'] },
-    'dec':   { presses: 1, outputDelta: [1],    labels: ['dec'] },
-    'ch':    { presses: 1, outputDelta: [1],    labels: ['ch'] },
+  // ---- Stitch tables ----
+  //
+  // Two orthogonal concepts:
+  //   HEIGHTS  — base stitches (sc, hdc, dc, tr, dtr). All are structurally
+  //              identical: 1 press, +1 output when plain. Only the label
+  //              differs. Increases/decreases are applied as an operation.
+  //   SPECIALS — non-height tokens with fixed press/output behavior.
+  const HEIGHTS = {
+    'sc':  'sc',
+    'hdc': 'hdc',
+    'dc':  'dc',
+    'tr':  'tr',
+    'dtr': 'dtr',
+  };
+
+  const SPECIALS = {
+    'ch':    { presses: 1, outputDelta: [1], labels: ['ch'] },
     // Turning chain: physically a chain, but conventionally NOT counted in
     // the row's stitch total. AI converter emits this at the end of flat rows.
-    'tch':   { presses: 1, outputDelta: [0],    labels: ['turning ch'] },
-    'sl st': { presses: 1, outputDelta: [1],    labels: ['sl st'] },
+    'tch':   { presses: 1, outputDelta: [0], labels: ['turning ch'] },
+    'sl st': { presses: 1, outputDelta: [1], labels: ['sl st'] },
     // Joining slip stitch used to close a round ("sl st in first sc to join").
     // 0-output so the round's stitch total still matches the source.
-    'join':  { presses: 1, outputDelta: [0],    labels: ['↻ sl st (join)'] },
-    'mr':    { presses: 1, outputDelta: [0],    labels: ['MR (form magic ring)'] },
-    'fo':    { presses: 1, outputDelta: [0],    labels: ['FO (fasten off)'] },
+    'join':  { presses: 1, outputDelta: [0], labels: ['↻ sl st (join)'] },
+    'mr':    { presses: 1, outputDelta: [0], labels: ['MR (form magic ring)'] },
+    'fo':    { presses: 1, outputDelta: [0], labels: ['FO (fasten off)'] },
     // Flip the work — used between rows in flat patterns.
-    'turn':  { presses: 1, outputDelta: [0],    labels: ['↩ turn the work'] },
+    'turn':  { presses: 1, outputDelta: [0], labels: ['↩ turn the work'] },
   };
 
   function normalizeStitchName(s) {
@@ -234,44 +245,94 @@
       inMR = true;
       text = mrMatch[1].trim();
     }
-    // Trailing modifier: blo (back loop only) or flo (front loop only).
+    // Placement modifier: blo (back loop only) or flo (front loop only).
     let modifier = null;
     const modMatch = text.match(/^(.+?)\s+(blo|flo)\s*$/i);
     if (modMatch) {
       modifier = modMatch[2].toLowerCase();
       text = modMatch[1].trim();
     }
-    // Accept "N stitch" (e.g. "28 sc") or "stitch N" (e.g. "ch 31") or just "stitch".
-    const STITCH_RE = /(sl\s*st|join|sc|inc|dec|ch|tch|mr|fo|turn)/i;
+
+    const HEIGHT = '(dtr|hdc|dc|tr|sc)';
     let count = 1;
-    let stitchSrc;
-    let m1 = text.match(new RegExp('^(?:(\\d+)\\s*)?' + STITCH_RE.source + '$', 'i'));
-    if (m1) {
-      if (m1[1] != null) count = parseInt(m1[1], 10);
-      stitchSrc = m1[2];
-    } else {
-      const m2 = text.match(new RegExp('^' + STITCH_RE.source + '(?:\\s+(\\d+))?$', 'i'));
-      if (!m2) throw new Error('Unknown instruction: "' + text + '"');
-      stitchSrc = m2[1];
-      if (m2[2] != null) count = parseInt(m2[2], 10);
+    let op = null;
+
+    // 1. Native decrease, height embedded: "dc2tog", "dc3tog", "6 dc2tog".
+    let m = text.match(new RegExp('^(?:(\\d+)\\s*)?' + HEIGHT + '(\\d+)tog$', 'i'));
+    if (m) {
+      if (m[1] != null) count = parseInt(m[1], 10);
+      return { type: 'stitch', stitch: m[2].toLowerCase(), op: { kind: 'dec', mult: parseInt(m[3], 10) }, count, inMR, modifier };
     }
-    const stitch = normalizeStitchName(stitchSrc);
-    return { type: 'stitch', stitch, count, inMR, modifier };
+
+    // 2. Word-form operation: "dc inc", "dc inc5", "dc dec3", bare "inc"/"dec", "6 inc".
+    m = text.match(/^(?:(.+?)\s+)?(inc|dec)(\d+)?$/i);
+    if (m) {
+      op = { kind: m[2].toLowerCase(), mult: m[3] != null ? parseInt(m[3], 10) : 2 };
+      const rest = (m[1] || '').trim();
+      // Remainder is an optional count + optional height (height defaults to sc).
+      const hm = rest.match(new RegExp('^(?:(\\d+)\\s*)?' + HEIGHT + '?$', 'i'));
+      if (!hm) throw new Error('Unknown instruction: "' + text + '"');
+      if (hm[1] != null) count = parseInt(hm[1], 10);
+      const stitch = hm[2] ? hm[2].toLowerCase() : 'sc';
+      return { type: 'stitch', stitch, op, count, inMR, modifier };
+    }
+
+    // 3. Plain height, count on either side: "dc", "6 dc", "dc 6".
+    m = text.match(new RegExp('^(?:(\\d+)\\s*)?' + HEIGHT + '$', 'i'));
+    if (m) {
+      if (m[1] != null) count = parseInt(m[1], 10);
+      return { type: 'stitch', stitch: m[2].toLowerCase(), op: null, count, inMR, modifier };
+    }
+    m = text.match(new RegExp('^' + HEIGHT + '\\s+(\\d+)$', 'i'));
+    if (m) {
+      return { type: 'stitch', stitch: m[1].toLowerCase(), op: null, count: parseInt(m[2], 10), inMR, modifier };
+    }
+
+    // 4. Special tokens, count on either side: "ch 31", "6 ch", "join", "turn".
+    const SPECIAL_RE = /(sl\s*st|join|tch|ch|mr|fo|turn)/i;
+    let s1 = text.match(new RegExp('^(?:(\\d+)\\s*)?' + SPECIAL_RE.source + '$', 'i'));
+    if (s1) {
+      if (s1[1] != null) count = parseInt(s1[1], 10);
+      return { type: 'stitch', stitch: normalizeStitchName(s1[2]), op: null, count, inMR, modifier };
+    }
+    const s2 = text.match(new RegExp('^' + SPECIAL_RE.source + '(?:\\s+(\\d+))?$', 'i'));
+    if (!s2) throw new Error('Unknown instruction: "' + text + '"');
+    count = s2[2] != null ? parseInt(s2[2], 10) : 1;
+    return { type: 'stitch', stitch: normalizeStitchName(s2[1]), op: null, count, inMR, modifier };
   }
 
   // ---- Row expansion ----
 
-  function makeStitchSteps(stitch, modifier) {
-    const info = STITCH_INFO[stitch];
-    const steps = [];
+  function makeStitchSteps(stitch, op, modifier) {
     const suffix = modifier ? ' (' + modifier + ')' : '';
-    for (let i = 0; i < info.presses; i++) {
-      steps.push({
-        stitch,
-        label: info.labels[i] + suffix,
-        outputDelta: info.outputDelta[i],
-        modifier: modifier || null,
-      });
+    const mod = modifier || null;
+
+    // Special (non-height) tokens: emit their literal steps.
+    if (SPECIALS[stitch]) {
+      const info = SPECIALS[stitch];
+      const steps = [];
+      for (let i = 0; i < info.presses; i++) {
+        steps.push({ stitch, label: info.labels[i] + suffix, outputDelta: info.outputDelta[i], modifier: mod });
+      }
+      return steps;
+    }
+
+    // Height tokens.
+    const heightLabel = HEIGHTS[stitch];
+    if (!op) {
+      return [{ stitch, label: heightLabel + suffix, outputDelta: 1, modifier: mod }];
+    }
+    if (op.kind === 'dec') {
+      // "dec" stays the legacy sc-2-together label; everything else is Ntog.
+      const label = (stitch === 'sc' && op.mult === 2) ? 'dec' : stitch + op.mult + 'tog';
+      return [{ stitch, label: label + suffix, outputDelta: 1, modifier: mod }];
+    }
+    // increase: M completed stitches, one press each.
+    const legBase = (stitch === 'sc' && op.mult === 2) ? 'inc' : stitch + ' inc';
+    const steps = [];
+    for (let i = 0; i < op.mult; i++) {
+      const label = legBase + ' (' + (i + 1) + '/' + op.mult + ')';
+      steps.push({ stitch, label: label + suffix, outputDelta: 1, modifier: mod });
     }
     return steps;
   }
@@ -288,10 +349,10 @@
         }
       } else {
         if (inst.inMR) {
-          steps.push({ stitch: 'mr', label: STITCH_INFO.mr.labels[0], outputDelta: 0, modifier: null });
+          steps.push({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null });
         }
         for (let i = 0; i < inst.count; i++) {
-          for (const s of makeStitchSteps(inst.stitch, inst.modifier)) steps.push(s);
+          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier)) steps.push(s);
         }
       }
     }
@@ -492,7 +553,8 @@
   }
 
   const api = {
-    STITCH_INFO,
+    HEIGHTS,
+    SPECIALS,
     parsePattern,
     parseLine,
     parseInstList,

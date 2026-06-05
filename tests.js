@@ -178,7 +178,8 @@
     const { rows, errors } = C.parsePattern('1: 6 SC (6)\n2: INC\n3: 4 SL ST');
     eq(errors.length, 0, 'case insensitive: no errors');
     eq(rows[0].pressSteps.every(s => s.stitch === 'sc'), true, 'case: SC -> sc');
-    eq(rows[1].pressSteps[0].stitch, 'inc', 'case: INC -> inc');
+    eq(rows[1].pressSteps[0].stitch, 'sc', 'case: INC -> sc height');
+    eq(rows[1].pressSteps[0].label, 'inc (1/2)', 'case: INC -> inc op');
     eq(rows[2].pressSteps[0].stitch, 'sl st', 'case: SL ST -> sl st');
   }
 
@@ -427,6 +428,88 @@
     eq(C.isDone(s, parsed), true, 'row 10 example: done after 32 presses');
     const totalOut = parsed.rows[0].pressSteps.reduce((a, s) => a + s.outputDelta, 0);
     eq(totalOut, 32, 'row 10 example: 32 output stitches');
+  }
+
+  // ---- Stitch heights ----
+
+  {
+    const { rows, errors } = C.parsePattern('1: 6 dc (6)');
+    eq(errors.length, 0, 'dc: no errors');
+    const s = rows[0].pressSteps;
+    eq(s.length, 6, 'dc: 6 presses');
+    eq(s.every(x => x.stitch === 'dc' && x.outputDelta === 1), true, 'dc: all dc, +1 each');
+    eq(s[0].label, 'dc', 'dc: plain label');
+  }
+  {
+    const { rows, errors } = C.parsePattern('1: tr, hdc, dtr (3)');
+    eq(errors.length, 0, 'heights: no errors');
+    const s = rows[0].pressSteps;
+    eq([s[0].stitch, s[1].stitch, s[2].stitch], ['tr', 'hdc', 'dtr'], 'heights: tr/hdc/dtr parse');
+    eq([s[0].label, s[1].label, s[2].label], ['tr', 'hdc', 'dtr'], 'heights: plain labels');
+    eq(s.reduce((a, x) => a + x.outputDelta, 0), 3, 'heights: output 3');
+  }
+
+  // ---- Parameterized decrease (Ntog) ----
+
+  {
+    const { rows } = C.parsePattern('1: dc2tog (1)');
+    const s = rows[0].pressSteps;
+    eq(s.length, 1, 'dc2tog: 1 press');
+    eq(s[0].outputDelta, 1, 'dc2tog: +1 output');
+    eq(s[0].stitch, 'dc', 'dc2tog: stitch is dc');
+    eq(s[0].label, 'dc2tog', 'dc2tog: label');
+  }
+  {
+    const { rows } = C.parsePattern('1: dc3tog, sc3tog (2)');
+    const s = rows[0].pressSteps;
+    eq(s.length, 2, 'Ntog: 2 presses');
+    eq([s[0].label, s[1].label], ['dc3tog', 'sc3tog'], '3tog labels for dc and sc');
+    eq(s.reduce((a, x) => a + x.outputDelta, 0), 2, 'Ntog: output 2');
+  }
+  {
+    // "6 dc3tog" = six dc-3-together clusters
+    const { rows } = C.parsePattern('1: 6 dc3tog (6)');
+    const s = rows[0].pressSteps;
+    eq(s.length, 6, '6 dc3tog: 6 presses');
+    eq(s.every(x => x.label === 'dc3tog'), true, '6 dc3tog: all dc3tog');
+  }
+
+  // ---- Parameterized increase ----
+
+  {
+    const { rows } = C.parsePattern('1: dc inc (2)');
+    const s = rows[0].pressSteps;
+    eq(s.length, 2, 'dc inc: 2 presses');
+    eq([s[0].label, s[1].label], ['dc inc (1/2)', 'dc inc (2/2)'], 'dc inc: leg labels');
+    eq([s[0].outputDelta, s[1].outputDelta], [1, 1], 'dc inc: +1 each leg');
+  }
+  {
+    // 5-dc shell = 5 dc in one stitch
+    const { rows } = C.parsePattern('1: dc inc5 (5)');
+    const s = rows[0].pressSteps;
+    eq(s.length, 5, 'dc inc5: 5 presses');
+    eq(s[0].label, 'dc inc (1/5)', 'dc inc5: first leg label');
+    eq(s[4].label, 'dc inc (5/5)', 'dc inc5: last leg label');
+    eq(s.reduce((a, x) => a + x.outputDelta, 0), 5, 'dc inc5: output 5');
+  }
+
+  // ---- Operations + placement modifier ----
+
+  {
+    const { rows } = C.parsePattern('1: dc2tog blo (1)');
+    const s = rows[0].pressSteps;
+    eq(s[0].label, 'dc2tog (blo)', 'dc2tog blo: label suffix');
+    eq(s[0].modifier, 'blo', 'dc2tog blo: modifier carried');
+  }
+
+  // ---- Mixed row with declared total ----
+
+  {
+    const { rows, warnings } = C.parsePattern('1: [3 dc, dc2tog] x 6 (24)');
+    const s = rows[0].pressSteps;
+    eq(s.length, 24, 'mixed: 6 * (3 + 1) = 24 presses');
+    eq(s.reduce((a, x) => a + x.outputDelta, 0), 24, 'mixed: output 24');
+    eq(warnings.length, 0, 'mixed: declared total matches, no warnings');
   }
 
   // ---- Report ----
