@@ -122,11 +122,35 @@ The stitch stays a single tap; the definition is informational. Rendering reads
 `step.definition` from the current press-step in the big-button render path
 (around [index.html:1010](index.html#L1010)).
 
-## AI converter (`CONVERT_PROMPT` in `index.html`)
+## AI converter prompt — extract to its own file
+
+Today the prompt lives in `index.html` as `const CONVERT_PROMPT = [ "...", "..."
+]` — an array of quoted strings that's hard to read and edit. Extract it into a
+dedicated file **before** adding the `def` grammar to it.
+
+- New file `convert-prompt.js` containing a single readable template literal:
+  `window.CONVERT_PROMPT = \`…\`;`. The whole prompt becomes one plain-text
+  block (no per-line quotes, escaping, or array commas).
+- Loaded via `<script src="convert-prompt.js"></script>` in `index.html`,
+  immediately before the existing inline `<script>` at
+  [index.html:205](index.html#L205), so the global is defined first.
+- The inline `const CONVERT_PROMPT = [ … ]` is removed; the usage at
+  [index.html:528](index.html#L528) (`CONVERT_PROMPT + rawText`) is unchanged —
+  it now references the global string. (As a string it concatenates with real
+  newlines; verify the existing `.join`/coercion behavior is preserved so the
+  prompt text the model receives is byte-identical aside from the new `def`
+  content.)
+
+**Why a `.js` file, not a `.txt`/`.md`:** the page is loaded over `file://`
+(the smoke test and local use), where `fetch()` of a sibling file is blocked by
+the browser. A `<script src>` works under `file://` with no fetch and no build
+step.
+
+### Teach the converter the `def` grammar
 
 Teach the converter to emit `def` lines when the source pattern defines its own
 stitches inline (e.g. `bo = bobble stitch`, `(mp = mini picot, ch2, slst…)`).
-Changes to the prompt:
+Changes to the prompt text (now in `convert-prompt.js`):
 
 - Add `def <name> [(<count>)] = <description>` to the line-type list and a short
   grammar note: custom stitches are single-press, opaque, count defaults to 1,
@@ -156,6 +180,12 @@ Changes to the prompt:
 - Backward compat: `parseLine`/`expandInstructions` called without a custom map
   behave as before.
 - Full motivating pattern parses with zero errors and correct per-row totals.
+
+Prompt extraction (`convert-prompt.js`):
+
+- Loads under `file://` — `window.CONVERT_PROMPT` is a defined non-empty string
+  after page load. The existing `ai-smoke.js` (puppeteer, `file://`) exercises
+  the converter path and must still pass.
 
 `server/test_server.py` — unaffected (server is sync-only; the converter prompt
 lives in the client and isn't unit-tested there). The AI prompt change is
