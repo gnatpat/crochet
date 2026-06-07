@@ -75,7 +75,7 @@
           content,
           rawLine: raw,
           expectedTotal: 0,
-          pressSteps: [{ stitch: 'note', label: '📝 done reading', outputDelta: 0 }],
+          pressSteps: [{ stitch: 'note', label: '📝 done reading', outputDelta: 0, definition: null }],
         });
       }
     }
@@ -101,7 +101,7 @@
           intro: [],
           rawLine: raw,
           expectedTotal: 0,
-          pressSteps: [{ stitch: 'section', label: '▶ tap to start', outputDelta: 0 }],
+          pressSteps: [{ stitch: 'section', label: '▶ tap to start', outputDelta: 0, definition: null }],
         };
         blocks.push(sectionBlock);
         pendingSectionBlock = sectionBlock;
