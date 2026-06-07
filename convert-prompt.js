@@ -25,6 +25,8 @@ stitches it adds to a row's total — DEFAULT 1; use (0) for a decorative stitch
 (e.g. a picot) that does not add to the count. <description> is free text shown
 to the user. Put def lines at the TOP, before the sections that use them. Once
 defined, use <name> in rows exactly like any other token.
+When checking the row's (N) total, count each use of <name> as its declared
+<count> (1 if omitted, 0 if declared (0)).
 
 An <inst-list> is a comma-separated list of instructions. Each instruction is one of:
 
@@ -38,7 +40,8 @@ An <inst-list> is a comma-separated list of instructions. Each instruction is on
   <stitch group> in MR       stitches worked into a magic ring, e.g. "6 sc in MR"
   [<inst-list>] x <K>        repeated group, e.g. "[3 sc, inc] x 6"
 
-<stitch> is EXACTLY one of the tokens in the table below (case-insensitive).
+<stitch> is EXACTLY one of the tokens in the table below, OR a name defined
+by a \`def\` line in this output (case-insensitive).
 NO other tokens are allowed inside a row. Anything else must become a \`note:\`.
 
   TOKEN  | OUTPUT | MEANING
@@ -106,7 +109,7 @@ TRANSLATION RULES — source phrase  ->  DSL
   Round numbers listed above the instructions in a column ->  pair them up in order
   "X = ..." or "(ab = ...)" defining a stitch abbreviation -> a \`def\` line; then use the token X/ab in rows
   a bobble / popcorn / puff that replaces one stitch        -> def it (count 1, the default), use the token
-  a picot / decorative motif worked between stitches        -> def it with (0), use the token between stitches
+  a picot / decorative motif worked between stitches        -> def it with (0), place the token inline in the row's inst-list
 
 ============================================================
 MANDATORY TRANSLATION DISCIPLINE
@@ -194,7 +197,7 @@ def mp (0) = mini picot, ch2, sl st into first ch made to form a point
 
 Notes on this example:
 - \`mp\` is decorative, so it is \`(0)\` and does NOT count toward the row's (18).
-  Row 6 total = 6 + 1 + 5×(hdc + hdc) + 1 = 18.
+  Row 6 total = 6 + 1 + 5×(1 hdc + 0 mp + 1 hdc) + 1 = 6 + 1 + 10 + 1 = 18.
 - \`bo\` replaces one stitch, so it uses the default count of 1.
   Row 8 total = 1 + 1 + 2 + 1 + 13 = 18.
 
