@@ -16,6 +16,15 @@ Each line is either blank, a section header, a note, or a row.
                     """
   Row:              <N>: <inst-list> (<count>)
   Row range:        <N>-<M>: <inst-list> (<count>)
+  Custom stitch:    def <name> [(<count>)] = <description>
+
+A \`def\` line declares a pattern-specific stitch (e.g. a bobble or picot) that
+is not in the standard token table. It is OPAQUE: one press, not broken into
+sub-steps. <name> is one lowercase word. The optional (<count>) is how many
+stitches it adds to a row's total — DEFAULT 1; use (0) for a decorative stitch
+(e.g. a picot) that does not add to the count. <description> is free text shown
+to the user. Put def lines at the TOP, before the sections that use them. Once
+defined, use <name> in rows exactly like any other token.
 
 An <inst-list> is a comma-separated list of instructions. Each instruction is one of:
 
@@ -95,6 +104,9 @@ TRANSLATION RULES — source phrase  ->  DSL
   "(white yarn)" / "with white yarn" / "switch to red"   ->  \`note: Use white yarn.\` etc.
   Paragraphs (TIPs, stuffing, fasten-off, etc.)          ->  \`note:\` (single-line) or \`note: """..."""\` (multi-line)
   Round numbers listed above the instructions in a column ->  pair them up in order
+  "X = ..." or "(ab = ...)" defining a stitch abbreviation -> a \`def\` line; then use the token X/ab in rows
+  a bobble / popcorn / puff that replaces one stitch        -> def it (count 1, the default), use the token
+  a picot / decorative motif worked between stitches        -> def it with (0), use the token between stitches
 
 ============================================================
 MANDATORY TRANSLATION DISCIPLINE
@@ -116,8 +128,11 @@ MANDATORY TRANSLATION DISCIPLINE
    decrease synonym ("dec", "scNtog", "dcNtog", "N sc together", "invisible dec") for ALL heights.
 6. CHECK the (N) at the end of each row equals the sum of OUTPUT-column values for the
    row's tokens. If it doesn't, you've left something un-translated — fix it.
-7. NEVER invent stitch tokens. The grammar above (token table + the
-   increases/decreases section) is exhaustive.
+7. NEVER invent stitch tokens out of thin air. The token table + increases/
+   decreases are exhaustive for STANDARD stitches. The ONE exception: when the
+   source pattern itself defines a non-standard abbreviation (e.g. "bo = bobble
+   stitch", "(mp = mini picot, ch2, slst…)"), emit a \`def\` line for it and use
+   that token in rows — do NOT bury it in a note.
 
 Example:
 
@@ -155,6 +170,33 @@ note: Fasten off, weave in ends.
 note: With white yarn.
 1: 6 sc in MR (6)
 2: 6 inc (12)
+
+============================================================
+WORKED EXAMPLE 0 — custom stitches (def)
+============================================================
+
+Input:
+BODY
+1. 6 sc in magic ring (6)
+6. sc6, then sc, [hdc, mp, hdc] x5, sc (18)
+   (mp = mini picot, ch2, slst into first ch made to form a point)
+8. sc, bo, sc2, bo, sc13 (18)
+bo = bobble stitch
+
+Output:
+def bo = bobble stitch
+def mp (0) = mini picot, ch2, sl st into first ch made to form a point
+
+[BODY]
+1: 6 sc in MR (6)
+6: 6 sc, sc, [hdc, mp, hdc] x 5, sc (18)
+8: sc, bo, 2 sc, bo, 13 sc (18)
+
+Notes on this example:
+- \`mp\` is decorative, so it is \`(0)\` and does NOT count toward the row's (18).
+  Row 6 total = 6 + 1 + 5×(hdc + hdc) + 1 = 18.
+- \`bo\` replaces one stitch, so it uses the default count of 1.
+  Row 8 total = 1 + 1 + 2 + 1 + 13 = 18.
 
 ============================================================
 WORKED EXAMPLE 1 — amigurumi spiral (see above for full output)
