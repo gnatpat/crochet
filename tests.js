@@ -557,10 +557,11 @@
   {
     const { errors } = C.parsePattern('def bo = first\ndef bo = second\n1: 6 sc (6)');
     eq(errors.length >= 1, true, 'def: duplicate name is rejected');
+    eq(errors.some(e => /[Dd]uplicate/.test(e.message)), true, 'def: duplicate error message is specific');
   }
   {
     const { errors } = C.parsePattern('def bo =\n1: 6 sc (6)');
-    eq(errors.length >= 1, true, 'def: empty description is rejected');
+    eq(errors.length >= 1, true, 'def: bare "=" with no description is rejected');
   }
   {
     const { errors } = C.parsePattern('def = nameless\n1: 6 sc (6)');

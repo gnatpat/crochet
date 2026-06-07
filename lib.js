@@ -33,7 +33,7 @@
   const RESERVED_NAMES = new Set([
     ...HEIGHTS,
     'ch', 'tch', 'sl st', 'slst', 'join', 'mr', 'fo', 'turn',
-    'inc', 'dec', 'tog', 'in', 'blo', 'flo', 'x', 'def',
+    'inc', 'dec', 'tog', 'in', 'blo', 'flo', 'x', 'def', 'note',
   ]);
 
   function normalizeStitchName(s) {
@@ -213,7 +213,7 @@
   // Pre-pass: scan every line for `def` lines and build the custom-stitch map.
   // Lets defs sit anywhere (conventionally the top) and still resolve in rows.
   function collectCustomStitches(lines) {
-    const custom = {};
+    const custom = Object.create(null);
     const errors = [];
     for (let i = 0; i < lines.length; i++) {
       const stripped = lines[i].replace(/#.*$/, '').trim();
