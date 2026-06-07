@@ -346,14 +346,16 @@
     }
 
     // 5. Custom (pattern-defined) stitch, optional count on either side.
+    // Names are validated as [a-z][a-z0-9]* at def time, so they need no regex
+    // escaping. The RegExp is rebuilt per call — fine, parse is one-shot per load.
     const names = Object.keys(custom);
     if (names.length) {
       // Longest name first so a name that is a prefix of another can't shadow it.
       const NAME_RE = names.slice().sort((a, b) => b.length - a.length).join('|');
-      let c1 = text.match(new RegExp('^(?:(\\d+)\\s*)?(' + NAME_RE + ')$', 'i'));
+      const c1 = text.match(new RegExp('^(?:(\\d+)\\s*)?(' + NAME_RE + ')$', 'i'));
       if (c1) {
-        if (c1[1] != null) count = parseInt(c1[1], 10);
-        return { type: 'stitch', stitch: c1[2].toLowerCase(), op: null, count, inMR, modifier };
+        const cnt = c1[1] != null ? parseInt(c1[1], 10) : 1;
+        return { type: 'stitch', stitch: c1[2].toLowerCase(), op: null, count: cnt, inMR, modifier };
       }
       const c2 = text.match(new RegExp('^(' + NAME_RE + ')\\s+(\\d+)$', 'i'));
       if (c2) {
@@ -375,7 +377,7 @@
       const info = SPECIALS[stitch];
       const steps = [];
       for (let i = 0; i < info.presses; i++) {
-        steps.push({ stitch, label: info.labels[i] + suffix, outputDelta: info.outputDelta[i], modifier: mod });
+        steps.push({ stitch, label: info.labels[i] + suffix, outputDelta: info.outputDelta[i], modifier: mod, definition: null });
       }
       return steps;
     }
@@ -388,19 +390,19 @@
 
     // Height tokens.
     if (!op) {
-      return [{ stitch, label: stitch + suffix, outputDelta: 1, modifier: mod }];
+      return [{ stitch, label: stitch + suffix, outputDelta: 1, modifier: mod, definition: null }];
     }
     if (op.kind === 'dec') {
       // "dec" stays the legacy sc-2-together label; everything else is Ntog.
       const label = (stitch === 'sc' && op.mult === 2) ? 'dec' : stitch + op.mult + 'tog';
-      return [{ stitch, label: label + suffix, outputDelta: 1, modifier: mod }];
+      return [{ stitch, label: label + suffix, outputDelta: 1, modifier: mod, definition: null }];
     }
     // increase: M completed stitches, one press each.
     const legBase = (stitch === 'sc' && op.mult === 2) ? 'inc' : stitch + ' inc';
     const steps = [];
     for (let i = 0; i < op.mult; i++) {
       const label = legBase + ' (' + (i + 1) + '/' + op.mult + ')';
-      steps.push({ stitch, label: label + suffix, outputDelta: 1, modifier: mod });
+      steps.push({ stitch, label: label + suffix, outputDelta: 1, modifier: mod, definition: null });
     }
     return steps;
   }
@@ -413,12 +415,12 @@
         for (let i = 0; i < inst.repeat; i++) {
           for (const s of inner) steps.push({
             stitch: s.stitch, label: s.label, outputDelta: s.outputDelta,
-            modifier: s.modifier || null, definition: s.definition || null,
+            modifier: s.modifier || null, definition: s.definition,
           });
         }
       } else {
         if (inst.inMR) {
-          steps.push({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null });
+          steps.push({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null, definition: null });
         }
         for (let i = 0; i < inst.count; i++) {
           for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier, custom)) steps.push(s);

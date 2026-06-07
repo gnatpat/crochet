@@ -601,6 +601,26 @@
     eq(rows[0].pressSteps.length, 2, 'custom count: 2 bo -> 2 steps');
   }
   {
+    const src = 'def bo = bobble\n1: bo 3 (3)';
+    const { rows, errors } = C.parsePattern(src);
+    eq(errors.length, 0, 'custom count: trailing-count "bo 3" parses');
+    eq(rows[0].pressSteps.length, 3, 'custom count: bo 3 -> 3 steps');
+  }
+  {
+    const src = 'def bo = bobble\n1: bo flo (1)';
+    const { rows, errors } = C.parsePattern(src);
+    eq(errors.length, 0, 'custom modifier: "bo flo" parses');
+    eq(rows[0].pressSteps[0].modifier, 'flo', 'custom modifier: flo carried on the custom step');
+    eq(rows[0].pressSteps[0].definition, 'bobble', 'custom modifier: definition still present with a modifier');
+  }
+  {
+    // Every press-step carries a `definition` field; built-ins have it as null.
+    const { rows } = C.parsePattern('1: 2 sc, [sc] x 2 (4)');
+    const steps = rows[0].pressSteps;
+    eq(steps.every(s => 'definition' in s), true, 'shape: every built-in step has a definition key');
+    eq(steps.every(s => s.definition === null), true, 'shape: built-in definitions are null (grouped and not)');
+  }
+  {
     const { errors } = C.parsePattern('1: 6 zz (6)');
     eq(errors.length >= 1, true, 'undefined token still errors');
   }
