@@ -568,6 +568,43 @@
     eq(errors.length >= 1, true, 'def: missing name is rejected');
   }
 
+  // ---- Custom stitches used in rows ----
+
+  {
+    const src = 'def bo = bobble stitch (yo, pull up x5, close)\n1: sc, bo, 2 sc, bo, 13 sc (18)';
+    const { rows, errors, warnings } = C.parsePattern(src);
+    eq(errors.length, 0, 'custom row: no errors');
+    eq(warnings.length, 0, 'custom row: total 18 matches');
+    const steps = rows[0].pressSteps;
+    const total = steps.reduce((a, s) => a + s.outputDelta, 0);
+    eq(total, 18, 'custom row: bo counts as 1 each -> 18');
+    const bo = steps.find(s => s.stitch === 'bo');
+    eq(bo.outputDelta, 1, 'custom row: bo outputDelta default 1');
+    eq(bo.label, 'bo', 'custom row: bo label is its name');
+    eq(bo.definition, 'bobble stitch (yo, pull up x5, close)', 'custom row: bo carries its definition');
+  }
+  {
+    const src = 'def mp (0) = mini picot: ch2, sl st\n6: 6 sc, sc, [hdc, mp, hdc] x 5, sc (18)';
+    const { rows, errors, warnings } = C.parsePattern(src);
+    eq(errors.length, 0, 'picot row: no errors');
+    eq(warnings.length, 0, 'picot row: mp(0) keeps total at 18');
+    const steps = rows[0].pressSteps;
+    const mp = steps.find(s => s.stitch === 'mp');
+    eq(mp.outputDelta, 0, 'picot row: mp(0) contributes 0');
+    eq(mp.definition, 'mini picot: ch2, sl st', 'picot row: mp inside a group still carries its definition');
+    eq(steps.filter(s => s.stitch === 'mp').length, 5, 'picot row: group x5 produced 5 mp steps');
+  }
+  {
+    const src = 'def bo = bobble\n1: 2 bo (2)';
+    const { rows, errors } = C.parsePattern(src);
+    eq(errors.length, 0, 'custom count: "2 bo" parses');
+    eq(rows[0].pressSteps.length, 2, 'custom count: 2 bo -> 2 steps');
+  }
+  {
+    const { errors } = C.parsePattern('1: 6 zz (6)');
+    eq(errors.length >= 1, true, 'undefined token still errors');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;

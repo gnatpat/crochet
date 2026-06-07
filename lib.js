@@ -155,7 +155,7 @@
       // Row
       let parsed;
       try {
-        parsed = parseLine(stripped);
+        parsed = parseLine(stripped, custom);
       } catch (e) {
         errors.push({ line: lineNo, message: e.message, raw });
         i++;
@@ -165,7 +165,7 @@
       const start = parsed.rangeStart;
       const end = parsed.rangeEnd == null ? parsed.rangeStart : parsed.rangeEnd;
       for (let r = start; r <= end; r++) {
-        const pressSteps = expandInstructions(parsed.instructions);
+        const pressSteps = expandInstructions(parsed.instructions, custom);
         const computedTotal = pressSteps.reduce((a, s) => a + s.outputDelta, 0);
         if (parsed.expectedTotal != null && parsed.expectedTotal !== computedTotal) {
           warnings.push({
@@ -230,7 +230,7 @@
     return { custom, errors };
   }
 
-  function parseLine(line) {
+  function parseLine(line, custom = Object.create(null)) {
     const m = line.match(/^(\d+)(?:-(\d+))?\s*:\s*(.+?)\s*(?:\((\d+)\))?\s*$/);
     if (!m) throw new Error('Could not parse line: "' + line + '"');
     const rangeStart = parseInt(m[1], 10);
@@ -238,7 +238,7 @@
     if (rangeEnd != null && rangeEnd < rangeStart) {
       throw new Error('Invalid row range: ' + rangeStart + '-' + rangeEnd);
     }
-    const instructions = parseInstList(m[3]);
+    const instructions = parseInstList(m[3], custom);
     if (instructions.length === 0) {
       throw new Error('Empty instructions on line: "' + line + '"');
     }
@@ -265,17 +265,17 @@
     return parts;
   }
 
-  function parseInstList(text) {
-    return splitTopLevel(text, ',').map(parseInst);
+  function parseInstList(text, custom = Object.create(null)) {
+    return splitTopLevel(text, ',').map(t => parseInst(t, custom));
   }
 
-  function parseInst(text) {
+  function parseInst(text, custom = Object.create(null)) {
     text = text.trim();
     const groupMatch = text.match(/^\[(.+)\]\s*x\s*(\d+)$/i);
     if (groupMatch) {
       return {
         type: 'group',
-        instructions: parseInstList(groupMatch[1]),
+        instructions: parseInstList(groupMatch[1], custom),
         repeat: parseInt(groupMatch[2], 10),
       };
     }
@@ -340,14 +340,33 @@
       return { type: 'stitch', stitch: normalizeStitchName(s1[2]), op: null, count, inMR, modifier };
     }
     const s2 = text.match(new RegExp('^' + SPECIAL_RE.source + '(?:\\s+(\\d+))?$', 'i'));
-    if (!s2) throw new Error('Unknown instruction: "' + text + '"');
-    count = s2[2] != null ? parseInt(s2[2], 10) : 1;
-    return { type: 'stitch', stitch: normalizeStitchName(s2[1]), op: null, count, inMR, modifier };
+    if (s2) {
+      count = s2[2] != null ? parseInt(s2[2], 10) : 1;
+      return { type: 'stitch', stitch: normalizeStitchName(s2[1]), op: null, count, inMR, modifier };
+    }
+
+    // 5. Custom (pattern-defined) stitch, optional count on either side.
+    const names = Object.keys(custom);
+    if (names.length) {
+      // Longest name first so a name that is a prefix of another can't shadow it.
+      const NAME_RE = names.slice().sort((a, b) => b.length - a.length).join('|');
+      let c1 = text.match(new RegExp('^(?:(\\d+)\\s*)?(' + NAME_RE + ')$', 'i'));
+      if (c1) {
+        if (c1[1] != null) count = parseInt(c1[1], 10);
+        return { type: 'stitch', stitch: c1[2].toLowerCase(), op: null, count, inMR, modifier };
+      }
+      const c2 = text.match(new RegExp('^(' + NAME_RE + ')\\s+(\\d+)$', 'i'));
+      if (c2) {
+        return { type: 'stitch', stitch: c2[1].toLowerCase(), op: null, count: parseInt(c2[2], 10), inMR, modifier };
+      }
+    }
+
+    throw new Error('Unknown instruction: "' + text + '"');
   }
 
   // ---- Row expansion ----
 
-  function makeStitchSteps(stitch, op, modifier) {
+  function makeStitchSteps(stitch, op, modifier, custom = Object.create(null)) {
     const suffix = modifier ? ' (' + modifier + ')' : '';
     const mod = modifier || null;
 
@@ -359,6 +378,12 @@
         steps.push({ stitch, label: info.labels[i] + suffix, outputDelta: info.outputDelta[i], modifier: mod });
       }
       return steps;
+    }
+
+    // Custom (pattern-defined) stitch: one opaque press carrying its definition.
+    if (custom[stitch]) {
+      const info = custom[stitch];
+      return [{ stitch, label: stitch + suffix, outputDelta: info.count, modifier: mod, definition: info.description }];
     }
 
     // Height tokens.
@@ -380,14 +405,15 @@
     return steps;
   }
 
-  function expandInstructions(insts) {
+  function expandInstructions(insts, custom = Object.create(null)) {
     const steps = [];
     for (const inst of insts) {
       if (inst.type === 'group') {
-        const inner = expandInstructions(inst.instructions);
+        const inner = expandInstructions(inst.instructions, custom);
         for (let i = 0; i < inst.repeat; i++) {
           for (const s of inner) steps.push({
-            stitch: s.stitch, label: s.label, outputDelta: s.outputDelta, modifier: s.modifier || null,
+            stitch: s.stitch, label: s.label, outputDelta: s.outputDelta,
+            modifier: s.modifier || null, definition: s.definition || null,
           });
         }
       } else {
@@ -395,7 +421,7 @@
           steps.push({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null });
         }
         for (let i = 0; i < inst.count; i++) {
-          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier)) steps.push(s);
+          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier, custom)) steps.push(s);
         }
       }
     }
