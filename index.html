@@ -181,6 +181,8 @@
     .big-button .next-small { font-size: 14px; opacity: 0.7; font-weight: 500; }
     .big-button .next-label { font-size: 44px; font-weight: 800; letter-spacing: -0.5px; text-align: center; }
     .big-button .hint { font-size: 12px; opacity: 0.55; margin-top: 16px; }
+    .big-button .stitch-def { font-size: 15px; opacity: 0.72; margin-top: 12px; max-width: 92%; line-height: 1.35; }
+    .big-button.compact .stitch-def { font-size: 12px; margin-top: 6px; }
 
     .tracker-actions { display: flex; gap: 8px; margin-top: 12px; }
     .tracker-actions .btn { flex: 1; }
@@ -765,6 +767,12 @@
           bigBtn.disabled = false;
           bigBtn.appendChild(el('div', { class: 'next-small' }, 'Next:'));
           bigBtn.appendChild(el('div', { class: 'next-label' }, C.nextLabel(cur, parsed)));
+          const defBlock = C.currentBlock(cur, parsed);
+          const defStep = (!cur.markerPending && defBlock && defBlock.pressSteps)
+            ? defBlock.pressSteps[cur.stepIndex] : null;
+          if (defStep && defStep.definition) {
+            bigBtn.appendChild(el('div', { class: 'stitch-def' }, 'ⓘ ' + defStep.definition));
+          }
           bigBtn.appendChild(el('div', { class: 'hint' }, 'Tap, or press Space / Enter'));
         }
         backBtn.disabled    = done || (cur.blockIndex === 0 && cur.stepIndex === 0 && !cur.markerPending);
