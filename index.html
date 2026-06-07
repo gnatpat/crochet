@@ -181,8 +181,11 @@
     .big-button .next-small { font-size: 14px; opacity: 0.7; font-weight: 500; }
     .big-button .next-label { font-size: 44px; font-weight: 800; letter-spacing: -0.5px; text-align: center; }
     .big-button .hint { font-size: 12px; opacity: 0.55; margin-top: 16px; }
-    .big-button .stitch-def { font-size: 15px; opacity: 0.72; margin-top: 12px; max-width: 92%; line-height: 1.35; }
-    .big-button.compact .stitch-def { font-size: 12px; margin-top: 6px; }
+    .big-button .stitch-def {
+      font-size: 15px; margin-top: 14px; max-width: 90%; line-height: 1.4; font-weight: 500;
+      color: #001; background: rgba(255,255,255,0.6); padding: 7px 14px; border-radius: 999px;
+    }
+    .big-button.compact .stitch-def { font-size: 12px; margin-top: 8px; padding: 4px 10px; }
 
     .tracker-actions { display: flex; gap: 8px; margin-top: 12px; }
     .tracker-actions .btn { flex: 1; }
@@ -738,7 +741,7 @@
           const lastNum = lastInSection ? lastInSection.rowNumber : row.rowNumber;
           const rangeNote = row.rangeEnd && row.rangeEnd !== row.rangeStart
             ? ' (within ' + row.rangeStart + '–' + row.rangeEnd + ')' : '';
-          const sectionLabel = row.section ? el('div', { class: 'section-label' }, row.section) : null;
+          const sectionLabel = row.section ? el('div', { class: 'section-label' }, row.section) : '';
           rowHead.append(
             sectionLabel,
             el('div', { class: 'row-num' },
