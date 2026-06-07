@@ -542,6 +542,89 @@
     eq(errors.length >= 1, true, 'dc1tog: rejected as a parse error');
   }
 
+  // ---- Custom stitch defs: collection & validation ----
+
+  {
+    const { blocks, errors } = C.parsePattern('def bo = bobble stitch\n[BODY]\n1: 6 sc (6)');
+    eq(errors.length, 0, 'def: valid def + row has no errors');
+    eq(blocks.filter(b => b.type === 'row').length, 1, 'def: def line produces no row block');
+    eq(blocks.some(b => b.rawLine && b.rawLine.indexOf('def ') === 0), false, 'def: no block for the def line itself');
+  }
+  {
+    const { errors } = C.parsePattern('def sc = something\n1: 6 sc (6)');
+    eq(errors.length >= 1, true, 'def: reserved name (sc) is rejected');
+  }
+  {
+    const { errors } = C.parsePattern('def bo = first\ndef bo = second\n1: 6 sc (6)');
+    eq(errors.length >= 1, true, 'def: duplicate name is rejected');
+    eq(errors.some(e => /[Dd]uplicate/.test(e.message)), true, 'def: duplicate error message is specific');
+  }
+  {
+    const { errors } = C.parsePattern('def bo =\n1: 6 sc (6)');
+    eq(errors.length >= 1, true, 'def: bare "=" with no description is rejected');
+  }
+  {
+    const { errors } = C.parsePattern('def = nameless\n1: 6 sc (6)');
+    eq(errors.length >= 1, true, 'def: missing name is rejected');
+  }
+
+  // ---- Custom stitches used in rows ----
+
+  {
+    const src = 'def bo = bobble stitch (yo, pull up x5, close)\n1: sc, bo, 2 sc, bo, 13 sc (18)';
+    const { rows, errors, warnings } = C.parsePattern(src);
+    eq(errors.length, 0, 'custom row: no errors');
+    eq(warnings.length, 0, 'custom row: total 18 matches');
+    const steps = rows[0].pressSteps;
+    const total = steps.reduce((a, s) => a + s.outputDelta, 0);
+    eq(total, 18, 'custom row: bo counts as 1 each -> 18');
+    const bo = steps.find(s => s.stitch === 'bo');
+    eq(bo.outputDelta, 1, 'custom row: bo outputDelta default 1');
+    eq(bo.label, 'bo', 'custom row: bo label is its name');
+    eq(bo.definition, 'bobble stitch (yo, pull up x5, close)', 'custom row: bo carries its definition');
+  }
+  {
+    const src = 'def mp (0) = mini picot: ch2, sl st\n6: 6 sc, sc, [hdc, mp, hdc] x 5, sc (18)';
+    const { rows, errors, warnings } = C.parsePattern(src);
+    eq(errors.length, 0, 'picot row: no errors');
+    eq(warnings.length, 0, 'picot row: mp(0) keeps total at 18');
+    const steps = rows[0].pressSteps;
+    const mp = steps.find(s => s.stitch === 'mp');
+    eq(mp.outputDelta, 0, 'picot row: mp(0) contributes 0');
+    eq(mp.definition, 'mini picot: ch2, sl st', 'picot row: mp inside a group still carries its definition');
+    eq(steps.filter(s => s.stitch === 'mp').length, 5, 'picot row: group x5 produced 5 mp steps');
+  }
+  {
+    const src = 'def bo = bobble\n1: 2 bo (2)';
+    const { rows, errors } = C.parsePattern(src);
+    eq(errors.length, 0, 'custom count: "2 bo" parses');
+    eq(rows[0].pressSteps.length, 2, 'custom count: 2 bo -> 2 steps');
+  }
+  {
+    const src = 'def bo = bobble\n1: bo 3 (3)';
+    const { rows, errors } = C.parsePattern(src);
+    eq(errors.length, 0, 'custom count: trailing-count "bo 3" parses');
+    eq(rows[0].pressSteps.length, 3, 'custom count: bo 3 -> 3 steps');
+  }
+  {
+    const src = 'def bo = bobble\n1: bo flo (1)';
+    const { rows, errors } = C.parsePattern(src);
+    eq(errors.length, 0, 'custom modifier: "bo flo" parses');
+    eq(rows[0].pressSteps[0].modifier, 'flo', 'custom modifier: flo carried on the custom step');
+    eq(rows[0].pressSteps[0].definition, 'bobble', 'custom modifier: definition still present with a modifier');
+  }
+  {
+    // Every press-step carries a `definition` field; built-ins have it as null.
+    const { rows } = C.parsePattern('1: 2 sc, [sc] x 2 (4)');
+    const steps = rows[0].pressSteps;
+    eq(steps.every(s => 'definition' in s), true, 'shape: every built-in step has a definition key');
+    eq(steps.every(s => s.definition === null), true, 'shape: built-in definitions are null (grouped and not)');
+  }
+  {
+    const { errors } = C.parsePattern('1: 6 zz (6)');
+    eq(errors.length >= 1, true, 'undefined token still errors');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;

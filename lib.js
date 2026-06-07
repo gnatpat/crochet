@@ -28,6 +28,14 @@
     'turn':  { presses: 1, outputDelta: [0], labels: ['↩ turn the work'] },
   };
 
+  // Names a pattern may NOT use for a custom `def` — built-in tokens plus the
+  // grammar words the parser reserves.
+  const RESERVED_NAMES = new Set([
+    ...HEIGHTS,
+    'ch', 'tch', 'sl st', 'slst', 'join', 'mr', 'fo', 'turn',
+    'inc', 'dec', 'tog', 'in', 'blo', 'flo', 'x', 'def', 'note',
+  ]);
+
   function normalizeStitchName(s) {
     s = s.toLowerCase().replace(/\s+/g, ' ').trim();
     if (s === 'slst') return 'sl st';
@@ -49,6 +57,8 @@
     const errors = [];
     const warnings = [];
     const lines = (text || '').split('\n');
+    const { custom, errors: defErrors } = collectCustomStitches(lines);
+    for (const e of defErrors) errors.push(e);
     let currentSection = null;
     // Section block whose `intro` we should fold notes into. Cleared as soon
     // as we see a row in that section.
@@ -65,7 +75,7 @@
           content,
           rawLine: raw,
           expectedTotal: 0,
-          pressSteps: [{ stitch: 'note', label: '📝 done reading', outputDelta: 0 }],
+          pressSteps: [{ stitch: 'note', label: '📝 done reading', outputDelta: 0, definition: null }],
         });
       }
     }
@@ -76,6 +86,9 @@
       const stripped = raw.replace(/#.*$/, '').trim();
 
       if (!stripped) { i++; continue; }
+
+      // `def` lines were consumed by the pre-pass; they produce no block.
+      if (/^def\b/i.test(stripped)) { i++; continue; }
 
       // Section header: [NAME]
       let m = stripped.match(/^\[(.+)\]$/);
@@ -88,7 +101,7 @@
           intro: [],
           rawLine: raw,
           expectedTotal: 0,
-          pressSteps: [{ stitch: 'section', label: '▶ tap to start', outputDelta: 0 }],
+          pressSteps: [{ stitch: 'section', label: '▶ tap to start', outputDelta: 0, definition: null }],
         };
         blocks.push(sectionBlock);
         pendingSectionBlock = sectionBlock;
@@ -142,7 +155,7 @@
       // Row
       let parsed;
       try {
-        parsed = parseLine(stripped);
+        parsed = parseLine(stripped, custom);
       } catch (e) {
         errors.push({ line: lineNo, message: e.message, raw });
         i++;
@@ -152,7 +165,7 @@
       const start = parsed.rangeStart;
       const end = parsed.rangeEnd == null ? parsed.rangeStart : parsed.rangeEnd;
       for (let r = start; r <= end; r++) {
-        const pressSteps = expandInstructions(parsed.instructions);
+        const pressSteps = expandInstructions(parsed.instructions, custom);
         const computedTotal = pressSteps.reduce((a, s) => a + s.outputDelta, 0);
         if (parsed.expectedTotal != null && parsed.expectedTotal !== computedTotal) {
           warnings.push({
@@ -184,7 +197,40 @@
     };
   }
 
-  function parseLine(line) {
+  // A custom stitch definition line: "def NAME [(count)] = description".
+  // Returns { name, count, description }. Throws on malformed/reserved/empty.
+  function parseDef(line) {
+    const m = line.match(/^def\s+([A-Za-z][A-Za-z0-9]*)\s*(?:\((\d+)\))?\s*=\s*(.+)$/i);
+    if (!m) throw new Error('Malformed def (use: def NAME [(count)] = description): "' + line + '"');
+    const name = m[1].toLowerCase();
+    if (RESERVED_NAMES.has(name)) throw new Error('Cannot define reserved stitch name: "' + name + '"');
+    const count = m[2] != null ? parseInt(m[2], 10) : 1;
+    const description = m[3].trim();
+    if (!description) throw new Error('Empty definition for "' + name + '"');
+    return { name, count, description };
+  }
+
+  // Pre-pass: scan every line for `def` lines and build the custom-stitch map.
+  // Lets defs sit anywhere (conventionally the top) and still resolve in rows.
+  function collectCustomStitches(lines) {
+    const custom = Object.create(null);
+    const errors = [];
+    for (let i = 0; i < lines.length; i++) {
+      const stripped = lines[i].replace(/#.*$/, '').trim();
+      if (!/^def\b/i.test(stripped)) continue;
+      let def;
+      try { def = parseDef(stripped); }
+      catch (e) { errors.push({ line: i + 1, message: e.message, raw: lines[i] }); continue; }
+      if (custom[def.name]) {
+        errors.push({ line: i + 1, message: 'Duplicate stitch definition: "' + def.name + '"', raw: lines[i] });
+        continue;
+      }
+      custom[def.name] = def;
+    }
+    return { custom, errors };
+  }
+
+  function parseLine(line, custom = Object.create(null)) {
     const m = line.match(/^(\d+)(?:-(\d+))?\s*:\s*(.+?)\s*(?:\((\d+)\))?\s*$/);
     if (!m) throw new Error('Could not parse line: "' + line + '"');
     const rangeStart = parseInt(m[1], 10);
@@ -192,7 +238,7 @@
     if (rangeEnd != null && rangeEnd < rangeStart) {
       throw new Error('Invalid row range: ' + rangeStart + '-' + rangeEnd);
     }
-    const instructions = parseInstList(m[3]);
+    const instructions = parseInstList(m[3], custom);
     if (instructions.length === 0) {
       throw new Error('Empty instructions on line: "' + line + '"');
     }
@@ -219,17 +265,17 @@
     return parts;
   }
 
-  function parseInstList(text) {
-    return splitTopLevel(text, ',').map(parseInst);
+  function parseInstList(text, custom = Object.create(null)) {
+    return splitTopLevel(text, ',').map(t => parseInst(t, custom));
   }
 
-  function parseInst(text) {
+  function parseInst(text, custom = Object.create(null)) {
     text = text.trim();
     const groupMatch = text.match(/^\[(.+)\]\s*x\s*(\d+)$/i);
     if (groupMatch) {
       return {
         type: 'group',
-        instructions: parseInstList(groupMatch[1]),
+        instructions: parseInstList(groupMatch[1], custom),
         repeat: parseInt(groupMatch[2], 10),
       };
     }
@@ -294,14 +340,35 @@
       return { type: 'stitch', stitch: normalizeStitchName(s1[2]), op: null, count, inMR, modifier };
     }
     const s2 = text.match(new RegExp('^' + SPECIAL_RE.source + '(?:\\s+(\\d+))?$', 'i'));
-    if (!s2) throw new Error('Unknown instruction: "' + text + '"');
-    count = s2[2] != null ? parseInt(s2[2], 10) : 1;
-    return { type: 'stitch', stitch: normalizeStitchName(s2[1]), op: null, count, inMR, modifier };
+    if (s2) {
+      count = s2[2] != null ? parseInt(s2[2], 10) : 1;
+      return { type: 'stitch', stitch: normalizeStitchName(s2[1]), op: null, count, inMR, modifier };
+    }
+
+    // 5. Custom (pattern-defined) stitch, optional count on either side.
+    // Names are validated as [a-z][a-z0-9]* at def time, so they need no regex
+    // escaping. The RegExp is rebuilt per call — fine, parse is one-shot per load.
+    const names = Object.keys(custom);
+    if (names.length) {
+      // Longest name first so a name that is a prefix of another can't shadow it.
+      const NAME_RE = names.slice().sort((a, b) => b.length - a.length).join('|');
+      const c1 = text.match(new RegExp('^(?:(\\d+)\\s*)?(' + NAME_RE + ')$', 'i'));
+      if (c1) {
+        const cnt = c1[1] != null ? parseInt(c1[1], 10) : 1;
+        return { type: 'stitch', stitch: c1[2].toLowerCase(), op: null, count: cnt, inMR, modifier };
+      }
+      const c2 = text.match(new RegExp('^(' + NAME_RE + ')\\s+(\\d+)$', 'i'));
+      if (c2) {
+        return { type: 'stitch', stitch: c2[1].toLowerCase(), op: null, count: parseInt(c2[2], 10), inMR, modifier };
+      }
+    }
+
+    throw new Error('Unknown instruction: "' + text + '"');
   }
 
   // ---- Row expansion ----
 
-  function makeStitchSteps(stitch, op, modifier) {
+  function makeStitchSteps(stitch, op, modifier, custom = Object.create(null)) {
     const suffix = modifier ? ' (' + modifier + ')' : '';
     const mod = modifier || null;
 
@@ -310,46 +377,53 @@
       const info = SPECIALS[stitch];
       const steps = [];
       for (let i = 0; i < info.presses; i++) {
-        steps.push({ stitch, label: info.labels[i] + suffix, outputDelta: info.outputDelta[i], modifier: mod });
+        steps.push({ stitch, label: info.labels[i] + suffix, outputDelta: info.outputDelta[i], modifier: mod, definition: null });
       }
       return steps;
     }
 
+    // Custom (pattern-defined) stitch: one opaque press carrying its definition.
+    if (custom[stitch]) {
+      const info = custom[stitch];
+      return [{ stitch, label: stitch + suffix, outputDelta: info.count, modifier: mod, definition: info.description }];
+    }
+
     // Height tokens.
     if (!op) {
-      return [{ stitch, label: stitch + suffix, outputDelta: 1, modifier: mod }];
+      return [{ stitch, label: stitch + suffix, outputDelta: 1, modifier: mod, definition: null }];
     }
     if (op.kind === 'dec') {
       // "dec" stays the legacy sc-2-together label; everything else is Ntog.
       const label = (stitch === 'sc' && op.mult === 2) ? 'dec' : stitch + op.mult + 'tog';
-      return [{ stitch, label: label + suffix, outputDelta: 1, modifier: mod }];
+      return [{ stitch, label: label + suffix, outputDelta: 1, modifier: mod, definition: null }];
     }
     // increase: M completed stitches, one press each.
     const legBase = (stitch === 'sc' && op.mult === 2) ? 'inc' : stitch + ' inc';
     const steps = [];
     for (let i = 0; i < op.mult; i++) {
       const label = legBase + ' (' + (i + 1) + '/' + op.mult + ')';
-      steps.push({ stitch, label: label + suffix, outputDelta: 1, modifier: mod });
+      steps.push({ stitch, label: label + suffix, outputDelta: 1, modifier: mod, definition: null });
     }
     return steps;
   }
 
-  function expandInstructions(insts) {
+  function expandInstructions(insts, custom = Object.create(null)) {
     const steps = [];
     for (const inst of insts) {
       if (inst.type === 'group') {
-        const inner = expandInstructions(inst.instructions);
+        const inner = expandInstructions(inst.instructions, custom);
         for (let i = 0; i < inst.repeat; i++) {
           for (const s of inner) steps.push({
-            stitch: s.stitch, label: s.label, outputDelta: s.outputDelta, modifier: s.modifier || null,
+            stitch: s.stitch, label: s.label, outputDelta: s.outputDelta,
+            modifier: s.modifier || null, definition: s.definition,
           });
         }
       } else {
         if (inst.inMR) {
-          steps.push({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null });
+          steps.push({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null, definition: null });
         }
         for (let i = 0; i < inst.count; i++) {
-          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier)) steps.push(s);
+          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier, custom)) steps.push(s);
         }
       }
     }
