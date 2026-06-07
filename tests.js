@@ -542,6 +542,31 @@
     eq(errors.length >= 1, true, 'dc1tog: rejected as a parse error');
   }
 
+  // ---- Custom stitch defs: collection & validation ----
+
+  {
+    const { blocks, errors } = C.parsePattern('def bo = bobble stitch\n[BODY]\n1: 6 sc (6)');
+    eq(errors.length, 0, 'def: valid def + row has no errors');
+    eq(blocks.filter(b => b.type === 'row').length, 1, 'def: def line produces no row block');
+    eq(blocks.some(b => b.rawLine && b.rawLine.indexOf('def ') === 0), false, 'def: no block for the def line itself');
+  }
+  {
+    const { errors } = C.parsePattern('def sc = something\n1: 6 sc (6)');
+    eq(errors.length >= 1, true, 'def: reserved name (sc) is rejected');
+  }
+  {
+    const { errors } = C.parsePattern('def bo = first\ndef bo = second\n1: 6 sc (6)');
+    eq(errors.length >= 1, true, 'def: duplicate name is rejected');
+  }
+  {
+    const { errors } = C.parsePattern('def bo =\n1: 6 sc (6)');
+    eq(errors.length >= 1, true, 'def: empty description is rejected');
+  }
+  {
+    const { errors } = C.parsePattern('def = nameless\n1: 6 sc (6)');
+    eq(errors.length >= 1, true, 'def: missing name is rejected');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;

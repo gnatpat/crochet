@@ -28,6 +28,14 @@
     'turn':  { presses: 1, outputDelta: [0], labels: ['↩ turn the work'] },
   };
 
+  // Names a pattern may NOT use for a custom `def` — built-in tokens plus the
+  // grammar words the parser reserves.
+  const RESERVED_NAMES = new Set([
+    ...HEIGHTS,
+    'ch', 'tch', 'sl st', 'slst', 'join', 'mr', 'fo', 'turn',
+    'inc', 'dec', 'tog', 'in', 'blo', 'flo', 'x', 'def',
+  ]);
+
   function normalizeStitchName(s) {
     s = s.toLowerCase().replace(/\s+/g, ' ').trim();
     if (s === 'slst') return 'sl st';
@@ -49,6 +57,8 @@
     const errors = [];
     const warnings = [];
     const lines = (text || '').split('\n');
+    const { custom, errors: defErrors } = collectCustomStitches(lines);
+    for (const e of defErrors) errors.push(e);
     let currentSection = null;
     // Section block whose `intro` we should fold notes into. Cleared as soon
     // as we see a row in that section.
@@ -76,6 +86,9 @@
       const stripped = raw.replace(/#.*$/, '').trim();
 
       if (!stripped) { i++; continue; }
+
+      // `def` lines were consumed by the pre-pass; they produce no block.
+      if (/^def\b/i.test(stripped)) { i++; continue; }
 
       // Section header: [NAME]
       let m = stripped.match(/^\[(.+)\]$/);
@@ -182,6 +195,39 @@
       warnings,
       rows: blocks.filter(b => b.type === 'row'),
     };
+  }
+
+  // A custom stitch definition line: "def NAME [(count)] = description".
+  // Returns { name, count, description }. Throws on malformed/reserved/empty.
+  function parseDef(line) {
+    const m = line.match(/^def\s+([A-Za-z][A-Za-z0-9]*)\s*(?:\((\d+)\))?\s*=\s*(.+)$/i);
+    if (!m) throw new Error('Malformed def (use: def NAME [(count)] = description): "' + line + '"');
+    const name = m[1].toLowerCase();
+    if (RESERVED_NAMES.has(name)) throw new Error('Cannot define reserved stitch name: "' + name + '"');
+    const count = m[2] != null ? parseInt(m[2], 10) : 1;
+    const description = m[3].trim();
+    if (!description) throw new Error('Empty definition for "' + name + '"');
+    return { name, count, description };
+  }
+
+  // Pre-pass: scan every line for `def` lines and build the custom-stitch map.
+  // Lets defs sit anywhere (conventionally the top) and still resolve in rows.
+  function collectCustomStitches(lines) {
+    const custom = {};
+    const errors = [];
+    for (let i = 0; i < lines.length; i++) {
+      const stripped = lines[i].replace(/#.*$/, '').trim();
+      if (!/^def\b/i.test(stripped)) continue;
+      let def;
+      try { def = parseDef(stripped); }
+      catch (e) { errors.push({ line: i + 1, message: e.message, raw: lines[i] }); continue; }
+      if (custom[def.name]) {
+        errors.push({ line: i + 1, message: 'Duplicate stitch definition: "' + def.name + '"', raw: lines[i] });
+        continue;
+      }
+      custom[def.name] = def;
+    }
+    return { custom, errors };
   }
 
   function parseLine(line) {
