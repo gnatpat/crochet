@@ -566,6 +566,17 @@
     return parsed.blocks[state.blockIndex];
   }
 
+  // The single mutually-exclusive state the UI is in, derived from the cursor.
+  // One of: 'done' | 'marker' | 'section' | 'note' | 'row'. 'marker' takes
+  // precedence over the block type (the marker prompt overlays a row); 'done'
+  // takes precedence over everything. Lets the view switch on one value instead
+  // of juggling several booleans that must stay mutually exclusive by hand.
+  function currentMode(state, parsed) {
+    if (isDone(state, parsed)) return 'done';
+    if (state && state.markerPending) return 'marker';
+    return parsed.blocks[state.blockIndex].type; // 'section' | 'note' | 'row'
+  }
+
   function rowsOf(parsed) { return parsed.blocks.filter(b => b.type === 'row'); }
 
   function sectionsOf(parsed) {
@@ -597,6 +608,48 @@
       if (b.type === 'row' && b.section === sectionName) last = b;
     }
     return last;
+  }
+
+  // Clamp a cursor to valid positions for `parsed`, repairing anything out of
+  // bounds (e.g. after the pattern was edited and shrank). The invariant it
+  // guarantees: blockIndex is in [0, blocks.length], where blocks.length is the
+  // "done" sentinel; and for a non-done cursor, stepIndex is a valid index into
+  // that block's pressSteps. History entries are clamped the same way. Assumes a
+  // normalized cursor (run normalizeCursor first for legacy shapes). Returns the
+  // original object unchanged when it was already valid, so callers can use a
+  // reference check to decide whether to persist.
+  function clampCursor(cursor, parsed) {
+    if (!cursor) return initialState();
+    const n = parsed.blocks.length;
+    function clampPos(blockIndex, stepIndex) {
+      let bi = blockIndex || 0;
+      if (bi < 0) bi = 0;
+      if (bi > n) bi = n;
+      if (bi >= n) return { blockIndex: bi, stepIndex: 0 }; // done carries no step
+      const last = parsed.blocks[bi].pressSteps.length - 1;
+      let si = stepIndex || 0;
+      if (si < 0) si = 0;
+      if (si > last) si = last;
+      return { blockIndex: bi, stepIndex: si };
+    }
+    const head = clampPos(cursor.blockIndex, cursor.stepIndex);
+    let historyChanged = false;
+    const history = (cursor.history || []).map(h => {
+      const p = clampPos(h.blockIndex, h.stepIndex);
+      if (p.blockIndex !== h.blockIndex || p.stepIndex !== h.stepIndex) historyChanged = true;
+      return { blockIndex: p.blockIndex, stepIndex: p.stepIndex, markerPending: !!h.markerPending };
+    });
+    if (!historyChanged &&
+        head.blockIndex === cursor.blockIndex &&
+        head.stepIndex === cursor.stepIndex) {
+      return cursor;
+    }
+    return {
+      blockIndex: head.blockIndex,
+      stepIndex: head.stepIndex,
+      markerPending: !!cursor.markerPending,
+      history,
+    };
   }
 
   // Migrate cursors stored in older formats:
@@ -641,11 +694,13 @@
     nextLabel,
     rowProgress,
     currentBlock,
+    currentMode,
     rowsOf,
     sectionsOf,
     previousSectionName,
     lastRowOfSection,
     normalizeCursor,
+    clampCursor,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

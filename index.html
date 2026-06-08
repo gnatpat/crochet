@@ -221,17 +221,22 @@
       tombstones: 'wooble:tombstones',
       sync: 'wooble:sync',
     };
-    function loadProjects() {
-      try { return JSON.parse(localStorage.getItem(KEYS.projects)) || []; }
-      catch (e) { return []; }
-    }
-    function saveProjects(list) { localStorage.setItem(KEYS.projects, JSON.stringify(list)); }
-    function loadProject(id) {
+    // Thin JSON-over-localStorage helpers. Every persisted blob is JSON, so
+    // these centralize the parse, the try/catch, and the missing-key fallback.
+    function readJSON(key, fallback) {
       try {
-        const p = JSON.parse(localStorage.getItem(KEYS.project(id)));
-        if (p && p.cursor) p.cursor = C.normalizeCursor(p.cursor);
-        return p;
-      } catch (e) { return null; }
+        const v = JSON.parse(localStorage.getItem(key));
+        return v == null ? fallback : v;
+      } catch (e) { return fallback; }
+    }
+    function writeJSON(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+
+    function loadProjects() { return readJSON(KEYS.projects, []); }
+    function saveProjects(list) { writeJSON(KEYS.projects, list); }
+    function loadProject(id) {
+      const p = readJSON(KEYS.project(id), null);
+      if (p && p.cursor) p.cursor = C.normalizeCursor(p.cursor);
+      return p;
     }
     function saveProject(p) {
       p.updatedAt = Date.now();
@@ -268,19 +273,13 @@
 
     // ---- Options ----
     const OPTIONS_KEY = 'wooble:options';
-    function loadOptions() {
-      try { return JSON.parse(localStorage.getItem(OPTIONS_KEY)) || {}; }
-      catch (e) { return {}; }
-    }
-    function saveOptions(o) { localStorage.setItem(OPTIONS_KEY, JSON.stringify(o)); }
+    function loadOptions() { return readJSON(OPTIONS_KEY, {}); }
+    function saveOptions(o) { writeJSON(OPTIONS_KEY, o); }
 
     // ---- LLM config (BYO OpenRouter key) ----
     const LLM_KEY = 'wooble:llm';
-    function loadLlmCfg() {
-      try { return JSON.parse(localStorage.getItem(LLM_KEY)) || {}; }
-      catch (e) { return {}; }
-    }
-    function saveLlmCfg(c) { localStorage.setItem(LLM_KEY, JSON.stringify(c)); }
+    function loadLlmCfg() { return readJSON(LLM_KEY, {}); }
+    function saveLlmCfg(c) { writeJSON(LLM_KEY, c); }
     const DEFAULT_LLM_MODEL = 'anthropic/claude-haiku-4.5';
 
     async function llmConvert(rawText, key, model, thinking) {
@@ -328,16 +327,14 @@
     }
 
     // ---- Sync config + tombstones ----
-    function loadSyncCfg() {
-      try { return JSON.parse(localStorage.getItem(KEYS.sync)) || {}; }
-      catch (e) { return {}; }
-    }
-    function saveSyncCfg(c) { localStorage.setItem(KEYS.sync, JSON.stringify(c)); }
-    function loadTombstones() {
-      try { return JSON.parse(localStorage.getItem(KEYS.tombstones)) || []; }
-      catch (e) { return []; }
-    }
-    function saveTombstones(t) { localStorage.setItem(KEYS.tombstones, JSON.stringify(t)); }
+    function loadSyncCfg() { return readJSON(KEYS.sync, {}); }
+    function saveSyncCfg(c) { writeJSON(KEYS.sync, c); }
+    function loadTombstones() { return readJSON(KEYS.tombstones, []); }
+    function saveTombstones(t) { writeJSON(KEYS.tombstones, t); }
+
+    // Sync is "configured" once we have both a key and a server to talk to.
+    // (Auto-sync-on-change is a separate opt-out: cfg.autoSync === false.)
+    function syncEnabled(cfg) { return !!(cfg && cfg.key && cfg.server); }
 
     function genSyncKey() {
       // 32 hex chars, ~128 bits entropy. crypto.randomUUID is fine but contains hyphens.
@@ -403,7 +400,7 @@
 
     async function syncNow() {
       const cfg = loadSyncCfg();
-      if (!cfg.key || !cfg.server) { setSyncStatus('off'); return { skipped: true }; }
+      if (!syncEnabled(cfg)) { setSyncStatus('off'); return { skipped: true }; }
       setSyncStatus('syncing');
       try {
         const url = cfg.server.replace(/\/$/, '') + '/api/sync';
@@ -433,7 +430,7 @@
     let syncTimer = null;
     function scheduleSync(delayMs) {
       const cfg = loadSyncCfg();
-      if (!cfg.key || !cfg.server || cfg.autoSync === false) return;
+      if (!syncEnabled(cfg) || cfg.autoSync === false) return;
       if (syncTimer) clearTimeout(syncTimer);
       syncTimer = setTimeout(() => { syncNow(); }, delayMs == null ? 2500 : delayMs);
     }
@@ -475,7 +472,7 @@
       const syncBtn = el('button', {
         class: 'icon-btn', title: 'Sync settings',
         onclick: () => navigate('#/sync'),
-      }, cfg.key && cfg.server ? '☁︎' : '☁');
+      }, syncEnabled(cfg) ? '☁︎' : '☁');
       const header = el('header', null,
         el('h1', null, 'Crochet tracker'),
         optionsBtn,
@@ -625,18 +622,11 @@
         return;
       }
 
-      // Repair cursor if pattern shrank
-      let cur = C.normalizeCursor(project.cursor);
-      if (cur.blockIndex > parsed.blocks.length) {
-        cur = C.initialState();
-        project.cursor = cur; saveProject(project);
-      } else if (cur.blockIndex < parsed.blocks.length &&
-                 cur.stepIndex > parsed.blocks[cur.blockIndex].pressSteps.length) {
-        cur = { blockIndex: cur.blockIndex, stepIndex: parsed.blocks[cur.blockIndex].pressSteps.length, history: cur.history };
-        project.cursor = cur; saveProject(project);
-      } else {
-        project.cursor = cur;
-      }
+      // Repair the cursor if the pattern shrank (e.g. after an edit). clampCursor
+      // guarantees an in-bounds position; persist only if it actually moved.
+      const beforeCursor = project.cursor;
+      project.cursor = C.clampCursor(beforeCursor, parsed);
+      if (project.cursor !== beforeCursor) saveProject(project);
 
       const infoCard = el('div', { class: 'info-card' });
       infoCard.style.display = 'none';
@@ -656,28 +646,25 @@
 
       function paint() {
         const cur = project.cursor;
-        const done = C.isDone(cur, parsed);
+        const mode = C.currentMode(cur, parsed); // 'done'|'marker'|'section'|'note'|'row'
+        const done = mode === 'done';
         const block = done ? null : C.currentBlock(cur, parsed);
-        const markerMode = !!(cur.markerPending && !done);
-        const sectionMode = !markerMode && block && block.type === 'section';
-        const noteMode    = !markerMode && block && block.type === 'note';
-        const rowMode     = !markerMode && block && block.type === 'row';
 
         clear(infoCard);
         infoCard.classList.remove('section', 'note', 'marker');
 
-        if (done) {
-          // Done state: show row-head with completion message
-          rowHead.style.display = '';
-          infoCard.style.display = 'none';
-          bigBtn.classList.remove('compact');
-        } else if (markerMode) {
+        // The info-card is shown for marker/section/note; the row-head for
+        // row/marker/done. The big button goes compact whenever an info-card
+        // is above it.
+        const showInfoCard = mode === 'marker' || mode === 'section' || mode === 'note';
+        infoCard.style.display = showInfoCard ? '' : 'none';
+        rowHead.style.display = (mode === 'row' || mode === 'marker' || done) ? '' : 'none';
+        bigBtn.classList.toggle('compact', showInfoCard);
+
+        if (mode === 'marker') {
           // Marker prompt — keep the row-head visible so the user still sees
           // which row/stitch they're on while placing the marker.
-          infoCard.style.display = '';
           infoCard.classList.add('marker');
-          rowHead.style.display = '';
-          bigBtn.classList.add('compact');
           const row = block && block.type === 'row' ? block : null;
           infoCard.append(
             el('div', { class: 'info-card-eyebrow' }, '🔖 Stitch marker'),
@@ -687,12 +674,8 @@
               (row ? 'Row ' + row.rowNumber : 'this row') + '). Then tap below to continue.'),
             el('div', { class: 'info-card-foot' }, 'You can turn this off in ⚙ Options.'),
           );
-        } else if (sectionMode) {
-          // Section transition
-          infoCard.style.display = '';
+        } else if (mode === 'section') {
           infoCard.classList.add('section');
-          rowHead.style.display = 'none';
-          bigBtn.classList.add('compact');
           const prevName = C.previousSectionName(parsed, cur.blockIndex);
           const title = prevName
             ? 'Finished ' + prevName + ' · Next: ' + block.name
@@ -706,12 +689,8 @@
           }
           children.push(el('div', { class: 'info-card-foot' }, 'Tap below to begin this section.'));
           infoCard.append(...children);
-        } else if (noteMode) {
-          // Note card
-          infoCard.style.display = '';
+        } else if (mode === 'note') {
           infoCard.classList.add('note');
-          rowHead.style.display = 'none';
-          bigBtn.classList.add('compact');
           const lastRow = sectionLastRowBefore(parsed, cur.blockIndex, block.section);
           const where = lastRow ? 'After Row ' + lastRow.rowNumber : 'Before Row 1';
           const sectionTag = block.section ? block.section + ' · ' : '';
@@ -720,11 +699,6 @@
             el('div', { class: 'info-card-body' }, block.content),
             el('div', { class: 'info-card-foot' }, 'Tap below when done reading.'),
           );
-        } else if (rowMode) {
-          // Row mode: full-size big button, row info above
-          infoCard.style.display = 'none';
-          rowHead.style.display = '';
-          bigBtn.classList.remove('compact');
         }
 
         // Row head content (visible in row mode, marker mode, or done)
@@ -734,7 +708,7 @@
             el('div', { class: 'row-num' }, 'All rows complete'),
             el('div', { class: 'row-raw' }, project.name + ' — finished!')
           );
-        } else if (rowMode || markerMode) {
+        } else if (mode === 'row' || mode === 'marker') {
           const row = block;
           const prog = C.rowProgress(cur, parsed);
           const lastInSection = lastRowPerSection[row.section || ''];
@@ -781,7 +755,7 @@
         backBtn.disabled    = done || (cur.blockIndex === 0 && cur.stepIndex === 0 && !cur.markerPending);
         undoBtn.disabled    = (cur.history.length === 0);
         // Row-done only makes sense when standing on a row
-        nextRowBtn.disabled = !rowMode;
+        nextRowBtn.disabled = mode !== 'row';
       }
 
       function sectionLastRowBefore(parsed, blockIndex, section) {
@@ -1162,7 +1136,7 @@
       const status = el('div', { class: 'card muted' });
       function paintStatus() {
         clear(status);
-        if (!cfg.key || !cfg.server) {
+        if (!syncEnabled(cfg)) {
           status.appendChild(el('div', null, 'Local only. Set a server URL and a sync key, then "Sync now" to start.'));
           return;
         }
@@ -1223,7 +1197,7 @@
       const qrBtn = el('button', { class: 'btn secondary', onclick: () => toggleQR() }, '📷 Show QR');
       function buildShareURL() {
         const c = loadSyncCfg();
-        if (!c.key || !c.server) return null;
+        if (!syncEnabled(c)) return null;
         const base = location.origin === 'null' ? '' : location.origin + location.pathname;
         const url = (base || c.server.replace(/\/$/, '') + '/') + '?syncKey=' + encodeURIComponent(c.key) +
                     '&server=' + encodeURIComponent(c.server);
@@ -1388,7 +1362,7 @@
     maybeImportFromURL();
     render();
     // Sync on open if configured
-    if ((function () { const c = loadSyncCfg(); return c.key && c.server; })()) {
+    if (syncEnabled(loadSyncCfg())) {
       syncNow();
     }
   })();

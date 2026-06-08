@@ -419,6 +419,69 @@
     eq(fixed2.blockIndex, 3, 'migration: idempotent');
   }
 
+  // ---- currentMode: the single derived view state ----
+
+  {
+    // Blocks: [section BODY][row 1][note]. (A note before the first row would
+    // fold into the section intro, so the note goes after the row here.)
+    const parsed = C.parsePattern('[BODY]\n1: 3 sc (3)\nnote: stuff it');
+    eq(parsed.blocks.map(b => b.type), ['section', 'row', 'note'], 'mode: block layout');
+
+    eq(C.currentMode({ blockIndex: 0, stepIndex: 0, markerPending: false, history: [] }, parsed),
+      'section', 'mode: section block -> section');
+    eq(C.currentMode({ blockIndex: 1, stepIndex: 0, markerPending: false, history: [] }, parsed),
+      'row', 'mode: row block -> row');
+    eq(C.currentMode({ blockIndex: 1, stepIndex: 1, markerPending: true, history: [] }, parsed),
+      'marker', 'mode: markerPending overrides block type');
+    eq(C.currentMode({ blockIndex: 2, stepIndex: 0, markerPending: false, history: [] }, parsed),
+      'note', 'mode: note block -> note');
+    eq(C.currentMode({ blockIndex: 3, stepIndex: 0, markerPending: false, history: [] }, parsed),
+      'done', 'mode: past last block -> done');
+    eq(C.currentMode({ blockIndex: 3, stepIndex: 0, markerPending: true, history: [] }, parsed),
+      'done', 'mode: done takes precedence over marker');
+  }
+
+  // ---- Cursor clamping (repair after a pattern shrinks) ----
+
+  {
+    // A 2-block pattern: [section][row]. The row has 3 press steps (3 sc).
+    const parsed = C.parsePattern('1: 3 sc (3)');
+    const nBlocks = parsed.blocks.length; // section? no — single row => 1 block
+
+    // In-bounds cursor is returned unchanged (same reference).
+    const valid = { blockIndex: 0, stepIndex: 1, markerPending: false, history: [] };
+    eq(C.clampCursor(valid, parsed) === valid, true, 'clamp: valid cursor returned by reference');
+
+    // blockIndex past the end clamps to the done sentinel (blocks.length).
+    const oob = C.clampCursor({ blockIndex: 99, stepIndex: 0, markerPending: false, history: [] }, parsed);
+    eq(oob.blockIndex, nBlocks, 'clamp: out-of-range block -> done sentinel');
+    eq(oob.stepIndex, 0, 'clamp: done sentinel carries stepIndex 0');
+    eq(C.isDone(oob, parsed), true, 'clamp: clamped done cursor reads as done');
+
+    // stepIndex past the block's last valid index clamps to that last index,
+    // NOT one past it (the old off-by-one).
+    const lastStep = parsed.blocks[0].pressSteps.length - 1;
+    const stepOob = C.clampCursor({ blockIndex: 0, stepIndex: 50, markerPending: false, history: [] }, parsed);
+    eq(stepOob.stepIndex, lastStep, 'clamp: out-of-range step -> last valid index');
+    eq(C.nextLabel(stepOob, parsed) !== '(end of row)', true, 'clamp: clamped step points at a real step');
+
+    // History entries are clamped too.
+    const withBadHistory = C.clampCursor(
+      { blockIndex: 0, stepIndex: 0, markerPending: false,
+        history: [{ blockIndex: 0, stepIndex: 0, markerPending: false },
+                  { blockIndex: 7, stepIndex: 9, markerPending: false }] },
+      parsed);
+    eq(withBadHistory.history[1].blockIndex, nBlocks, 'clamp: history block clamped');
+    eq(withBadHistory.history[0].blockIndex, 0, 'clamp: valid history entry preserved');
+
+    // markerPending is preserved through a clamp.
+    const withMarker = C.clampCursor({ blockIndex: 0, stepIndex: 50, markerPending: true, history: [] }, parsed);
+    eq(withMarker.markerPending, true, 'clamp: markerPending preserved');
+
+    // Null cursor becomes a fresh initial state.
+    eq(C.clampCursor(null, parsed).blockIndex, 0, 'clamp: null -> initial state');
+  }
+
   // ---- End-to-end the user's specific example ----
 
   {
