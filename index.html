@@ -289,6 +289,11 @@
     function loadLlmCfg() { return readJSON(LLM_KEY, {}); }
     function saveLlmCfg(c) { writeJSON(LLM_KEY, c); }
     const DEFAULT_LLM_MODEL = 'anthropic/claude-haiku-4.5';
+    const LLM_MODELS = [
+      { id: 'anthropic/claude-haiku-4.5', label: 'Claude Haiku 4.5 — fast & cheap (default)' },
+      { id: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet — stronger' },
+      { id: 'anthropic/claude-opus-4.7', label: 'Claude Opus — strongest, for hard patterns' },
+    ];
     const LLM_MAX_TOKENS = 32000;
 
     async function llmConvert(rawText, key, model, thinking, onDelta) {
@@ -1062,35 +1067,43 @@
       const raw = el('textarea', { placeholder: 'Paste the original pattern in any format. The AI will convert it to our DSL.' });
       raw.style.minHeight = '180px';
       const status = el('div', { class: 'muted', style: 'font-size:13px;min-height:1.2em' });
+      const thinkingPane = el('pre', { class: 'code-box', style: 'display:none; max-height:120px; overflow:auto; opacity:0.7; font-size:12px' });
+      const outputPane = el('pre', { class: 'code-box', style: 'display:none; max-height:160px; overflow:auto; font-size:12px' });
 
       // Key section — show only if no key stored, plus an "Edit key" toggle
       const keyInput = el('input', { type: 'password', placeholder: 'OpenRouter API key (sk-or-…)' });
-      const modelInput = el('input', { type: 'text', placeholder: 'Model (default: ' + DEFAULT_LLM_MODEL + ')' });
+      const modelSelect = el('select');
+      for (const m of LLM_MODELS) {
+        const opt = document.createElement('option');
+        opt.value = m.id; opt.textContent = m.label;
+        modelSelect.appendChild(opt);
+      }
+      const customOpt = document.createElement('option');
+      customOpt.value = '__custom__'; customOpt.textContent = 'Custom… (enter an OpenRouter model id)';
+      modelSelect.appendChild(customOpt);
+      const modelCustom = el('input', { type: 'text', placeholder: 'e.g. anthropic/claude-3.5-sonnet' });
+      modelCustom.style.display = 'none';
+      function syncModelUI(savedId) {
+        const known = LLM_MODELS.some(m => m.id === savedId);
+        if (savedId && !known) { modelSelect.value = '__custom__'; modelCustom.value = savedId; modelCustom.style.display = ''; }
+        else { modelSelect.value = savedId || DEFAULT_LLM_MODEL; modelCustom.style.display = 'none'; }
+      }
+      modelSelect.addEventListener('change', () => {
+        modelCustom.style.display = modelSelect.value === '__custom__' ? '' : 'none';
+      });
+      function selectedModelId() {
+        return modelSelect.value === '__custom__' ? modelCustom.value.trim() : modelSelect.value;
+      }
       const keyRow = el('div', { class: 'stack' },
         el('div', { class: 'muted', style: 'font-size:13px' }, 'OpenRouter key (stored locally, never sent anywhere except OpenRouter)'),
         keyInput,
-        el('div', { class: 'muted', style: 'font-size:13px;margin-top:4px' }, 'Model (optional)'),
-        modelInput,
-        el('div', { class: 'muted', style: 'font-size:12px' },
-          'Default ' + DEFAULT_LLM_MODEL + ' is fast and cheap. For verbose / unusual patterns ' +
-          'that the default struggles with, try ',
-          (function () {
-            const a = el('a', { href: '#', style: 'color: var(--accent); text-decoration: underline' }, 'anthropic/claude-sonnet-4.6');
-            a.onclick = (e) => { e.preventDefault(); modelInput.value = 'anthropic/claude-sonnet-4.6'; };
-            return a;
-          })(),
-          ' or ',
-          (function () {
-            const a = el('a', { href: '#', style: 'color: var(--accent); text-decoration: underline' }, 'anthropic/claude-opus-4.7');
-            a.onclick = (e) => { e.preventDefault(); modelInput.value = 'anthropic/claude-opus-4.7'; };
-            return a;
-          })(),
-          '.',
-        ),
+        el('div', { class: 'muted', style: 'font-size:13px;margin-top:4px' }, 'Model'),
+        modelSelect,
+        modelCustom,
       );
       const editKeyBtn = el('button', { class: 'btn secondary', onclick: () => {
         keyInput.value = llm.key || '';
-        modelInput.value = llm.model || '';
+        syncModelUI(llm.model || '');
         keyRow.style.display = '';
         editKeyBtn.style.display = 'none';
       } }, '🔑 Edit key');
@@ -1108,6 +1121,7 @@
         }
       }
       refreshKeyUI();
+      syncModelUI(llm.model || '');
 
       // Extended thinking toggle (defaults on)
       const thinkingCheckbox = el('input', { type: 'checkbox' });
@@ -1131,7 +1145,7 @@
         // If key inputs are showing, persist their values
         if (keyRow.style.display !== 'none') {
           const k = keyInput.value.trim();
-          const m = modelInput.value.trim();
+          const m = selectedModelId();
           if (!k) { status.textContent = 'Enter your OpenRouter key first.'; return; }
           const prev = loadLlmCfg();
           saveLlmCfg({ key: k, model: m, thinking: prev.thinking !== false });
@@ -1143,8 +1157,14 @@
         busy = true;
         convertBtn.disabled = true;
         status.textContent = (llm.thinking !== false) ? 'Converting (with thinking)…' : 'Converting…';
+        thinkingPane.textContent = ''; outputPane.textContent = '';
+        thinkingPane.style.display = ''; outputPane.style.display = '';
+        const onDelta = ({ content, reasoning }) => {
+          if (reasoning) { thinkingPane.textContent += reasoning; thinkingPane.scrollTop = thinkingPane.scrollHeight; }
+          if (content) { outputPane.textContent += content; outputPane.scrollTop = outputPane.scrollHeight; }
+        };
         try {
-          const out = await llmConvert(rawText, llm.key, llm.model, llm.thinking !== false, null);
+          const out = await llmConvert(rawText, llm.key, llm.model, llm.thinking !== false, onDelta);
           targetTextarea.value = out;
           targetTextarea.dispatchEvent(new Event('input'));
           close();
@@ -1173,6 +1193,8 @@
         editKeyBtn,
         keyRow,
         thinkingRow,
+        thinkingPane,
+        outputPane,
         status,
         el('div', { class: 'row' },
           el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
