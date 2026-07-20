@@ -689,12 +689,17 @@
           );
         } else if (mode === 'section') {
           infoCard.classList.add('section');
-          const prevName = C.previousSectionName(parsed, cur.blockIndex);
-          const title = prevName
-            ? 'Finished ' + prevName + ' · Next: ' + block.name
-            : 'Starting ' + block.name;
+          let eyebrow, title;
+          if (block.copyTotal > 1) {
+            eyebrow = '🧶 Piece ' + block.copyIndex + ' of ' + block.copyTotal;
+            title = block.name + ' · ' + block.copyIndex + ' of ' + block.copyTotal;
+          } else {
+            const prevName = C.previousSectionName(parsed, cur.blockIndex);
+            eyebrow = prevName ? '✨ Next part' : '✨ First part';
+            title = prevName ? 'Finished ' + prevName + ' · Next: ' + block.name : 'Starting ' + block.name;
+          }
           const children = [
-            el('div', { class: 'info-card-eyebrow' }, prevName ? '✨ Next part' : '✨ First part'),
+            el('div', { class: 'info-card-eyebrow' }, eyebrow),
             el('div', { class: 'info-card-title' }, title),
           ];
           for (const intro of (block.intro || [])) {
@@ -704,13 +709,21 @@
           infoCard.append(...children);
         } else if (mode === 'note') {
           infoCard.classList.add('note');
-          const lastRow = sectionLastRowBefore(parsed, cur.blockIndex, block.section);
-          const where = lastRow ? 'After Row ' + lastRow.rowNumber : 'Before Row 1';
-          const sectionTag = block.section ? block.section + ' · ' : '';
+          const isAssembly = block.section && /^(assembly|finishing)$/i.test(block.section);
+          let eyebrow;
+          if (isAssembly) {
+            const info = noteStepInfo(parsed, block);
+            eyebrow = '☑ ' + block.section + ' · step ' + info.idx + ' of ' + info.total;
+          } else {
+            const lastRow = sectionLastRowBefore(parsed, cur.blockIndex, block.section);
+            const where = lastRow ? 'After Row ' + lastRow.rowNumber : 'Before Row 1';
+            const sectionTag = block.section ? block.section + ' · ' : '';
+            eyebrow = '📝 ' + sectionTag + where;
+          }
           infoCard.append(
-            el('div', { class: 'info-card-eyebrow' }, '📝 ' + sectionTag + where),
+            el('div', { class: 'info-card-eyebrow' }, eyebrow),
             el('div', { class: 'info-card-body' }, block.content),
-            el('div', { class: 'info-card-foot' }, 'Tap below when done reading.'),
+            el('div', { class: 'info-card-foot' }, isAssembly ? 'Tap below when this step is done.' : 'Tap below when done reading.'),
           );
         }
 
@@ -787,6 +800,11 @@
           if (b.type === 'row' && b.section === section) return b;
         }
         return null;
+      }
+
+      function noteStepInfo(parsed, block) {
+        const notes = parsed.blocks.filter(b => b.type === 'note' && b.section === block.section);
+        return { idx: notes.indexOf(block) + 1, total: notes.length };
       }
 
       function flashPress() {
