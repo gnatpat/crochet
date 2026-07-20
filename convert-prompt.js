@@ -186,7 +186,7 @@ note: Stuff the piece, shaping it like an egg.
 note: Fasten off, weave in ends.
 
 [BELLY]
-note: With white yarn.
+color: white
 1: 6 sc in MR (6)
 2: 6 inc (12)
 
@@ -282,7 +282,7 @@ Round 5
 
 Output:
 [MUSHROOM TOP]
-note: Use red or brown yarn.
+color: brown
 note: The Ch1 at the end of each round does NOT count as a stitch (here and throughout).
 1: 8 sc in MR, join, tch 1 (8)
 2: 8 inc, join, tch 1 (16)
@@ -293,7 +293,7 @@ Fasten off, leaving a long tail for sewing. Using white yarn, add knots to make 
 """
 
 [MUSHROOM BOTTOM]
-note: Use white yarn.
+color: white
 1: 8 sc in MR, join, tch 1 (8)
 2: 3 sc, inc, 3 sc, inc, join, tch 1 (10)
 3-4: 10 sc, join, tch 1 (10)
