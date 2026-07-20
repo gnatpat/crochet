@@ -688,6 +688,172 @@
     eq(errors.length >= 1, true, 'undefined token still errors');
   }
 
+  // ---- Colour palette + resolution ----
+  {
+    eq(C.resolveColour('brown', {}).hex, '#6b4a2e', 'brown derives a hex');
+    eq(C.resolveColour('BROWN', {}).name, 'brown', 'resolveColour lowercases name');
+    assert(C.resolveColour('chartreuse', {}).hex == null, 'unknown colour -> hex null');
+    eq(C.resolveColour('brown', { brown: '#123456' }).hex, '#123456', 'palette overrides derived shade');
+    eq(C.resolveColour('buff', { buff: 'tan' }).hex, C.resolveColour('tan', {}).hex, 'palette value can be a colour word');
+
+    const { palette, errors } = C.collectPalette(['color brown = #6b4a2e', '1: 6 sc (6)']);
+    eq(errors.length, 0, 'collectPalette: no errors on valid line');
+    eq(palette.brown, '#6b4a2e', 'collectPalette captures the hex value');
+
+    const dup = C.collectPalette(['color brown = #111', 'color brown = #222']);
+    assert(dup.errors.some(e => /duplicate/i.test(e.message)), 'duplicate palette line errors');
+
+    const withComment = C.collectPalette(['color brown = #6b4a2e  # main body']);
+    eq(withComment.palette.brown, '#6b4a2e', 'trailing comment after hex is ignored');
+  }
+
+  // ---- Colour threading + anchor ----
+  {
+    const { blocks, errors } = C.parsePattern(
+      ['color: cream', '1: 3 sc (3)', 'color: brown', '2: 3 sc (3)'].join('\n'));
+    eq(errors.length, 0, 'colour threading: no errors');
+    const r1 = blocks.find(b => b.type === 'row' && b.rowNumber === 1);
+    const r2 = blocks.find(b => b.type === 'row' && b.rowNumber === 2);
+    eq(r1.pressSteps[0].color.name, 'cream', 'R1 stitches cream');
+    eq(r2.pressSteps[0].color.name, 'brown', 'R2 stitches brown');
+    eq(r1.pressSteps[r1.pressSteps.length - 1].changeTo.name, 'brown', 'last of R1 anchors to brown');
+    assert(r2.pressSteps[r2.pressSteps.length - 1].changeTo == null, 'R2 last has no change');
+  }
+  {
+    // Trailing join/tch must NOT be the anchor.
+    const { blocks } = C.parsePattern(
+      ['color: cream', '1: 3 sc, join (3)', 'color: brown', '2: 3 sc (3)'].join('\n'));
+    const r1 = blocks.find(b => b.type === 'row' && b.rowNumber === 1);
+    const scSteps = r1.pressSteps.filter(s => s.stitch === 'sc');
+    eq(scSteps[scSteps.length - 1].changeTo.name, 'brown', 'anchor lands on last sc');
+    eq(r1.pressSteps.find(s => s.stitch === 'join').changeTo, undefined, 'join is not the anchor');
+  }
+  {
+    // Mid-round inline colour change.
+    const { blocks, errors } = C.parsePattern('color: yellow\n1: 2 sc, color: brown, 2 sc (4)');
+    eq(errors.length, 0, 'inline colour: no errors');
+    const r = blocks.find(b => b.type === 'row');
+    eq(r.pressSteps.length, 4, 'inline colour emits no press-step');
+    eq(r.expectedTotal, 4, 'inline colour does not affect the (N) total');
+    eq(r.pressSteps[0].color.name, 'yellow', 'pre-switch stitches yellow');
+    eq(r.pressSteps[1].changeTo.name, 'brown', '2nd stitch anchors to brown');
+    eq(r.pressSteps[2].color.name, 'brown', 'post-switch stitches brown');
+  }
+  {
+    // Piece boundary (section) resets the anchor — no change onto the prior piece.
+    const { blocks } = C.parsePattern(
+      ['color: brown', '[Head]', '1: 3 sc (3)', '[Ears]', 'color: yellow', '1: 3 sc (3)'].join('\n'));
+    const head1 = blocks.find(b => b.type === 'row' && b.section === 'Head');
+    assert(head1.pressSteps[head1.pressSteps.length - 1].changeTo == null, 'no cross-piece anchor');
+    const ears1 = blocks.find(b => b.type === 'row' && b.section === 'Ears');
+    eq(ears1.pressSteps[0].color.name, 'yellow', 'ears start yellow');
+  }
+  {
+    // Regression: no colour anywhere -> color null, no changeTo.
+    const { blocks } = C.parsePattern('1: 3 sc (3)');
+    const r = blocks.find(b => b.type === 'row');
+    assert(r.pressSteps[0].color == null, 'no colour -> color null');
+    assert(r.pressSteps[0].changeTo == null, 'no colour -> no changeTo');
+  }
+
+  // ---- Make N ----
+  {
+    const { blocks, errors } = C.parsePattern('[Ears] x2\n1: 3 sc (3)\n2: 3 sc (3)');
+    eq(errors.length, 0, 'make-N: no errors');
+    const secs = blocks.filter(b => b.type === 'section');
+    eq(secs.length, 2, 'x2 duplicates the section block');
+    eq(secs[0].copyIndex, 1, 'first copy index 1');
+    eq(secs[1].copyIndex, 2, 'second copy index 2');
+    eq(secs[0].copyTotal, 2, 'copyTotal 2');
+    const rows = blocks.filter(b => b.type === 'row');
+    eq(rows.length, 4, 'rows duplicated (2 rows x2)');
+    eq(rows[0].rowNumber, 1, 'copy1 starts at R1');
+    eq(rows[2].rowNumber, 1, 'copy2 restarts at R1');
+  }
+  {
+    const { blocks } = C.parsePattern('[Head]\n1: 3 sc (3)');
+    const secs = blocks.filter(b => b.type === 'section');
+    eq(secs.length, 1, 'no x -> single section');
+    assert(!(secs[0].copyTotal > 1), 'copyTotal not > 1 for plain section');
+  }
+  {
+    // Colour survives duplication; no spurious cross-copy anchor.
+    const { blocks } = C.parsePattern('[Leg] x2\ncolor: cream\n1: 2 sc (2)\ncolor: yellow\n2: 2 sc (2)');
+    const rows = blocks.filter(b => b.type === 'row');
+    eq(rows.length, 4, 'leg duplicated');
+    eq(rows[0].pressSteps[0].color.name, 'cream', 'copy1 R1 cream');
+    eq(rows[0].pressSteps[1].changeTo.name, 'yellow', 'copy1 anchor to yellow');
+    eq(rows[2].pressSteps[0].color.name, 'cream', 'copy2 R1 cream (cloned)');
+    eq(rows[2].pressSteps[1].changeTo.name, 'yellow', 'copy2 anchor preserved');
+    assert(rows[1].pressSteps[rows[1].pressSteps.length - 1].changeTo == null, 'no cross-copy anchor');
+  }
+  {
+    // Colour switch immediately AFTER a repeated section anchors only on the last copy.
+    const { blocks } = C.parsePattern(
+      ['[Ears] x2', '1: 2 sc (2)', '2: 2 sc (2)', 'color: pink', '[Legs]', '1: 2 sc (2)'].join('\n'));
+    const earRows = blocks.filter(b => b.type === 'row' && b.section === 'Ears');
+    // earRows: copy1 R1, copy1 R2, copy2 R1, copy2 R2 (in order).
+    const copy1R2 = earRows[1], copy2R2 = earRows[3];
+    assert(copy1R2.pressSteps[copy1R2.pressSteps.length - 1].changeTo == null,
+      'copy 1 trailing stitch has NO cross-copy changeTo');
+    eq(copy2R2.pressSteps[copy2R2.pressSteps.length - 1].changeTo.name, 'pink',
+      'copy 2 trailing stitch keeps the changeTo to pink');
+  }
+  {
+    // Interior (mid-piece) colour change is preserved on ALL copies.
+    const { blocks } = C.parsePattern(
+      ['[Leg] x2', 'color: cream', '1: 2 sc (2)', 'color: yellow', '2: 2 sc (2)'].join('\n'));
+    const rows = blocks.filter(b => b.type === 'row');
+    eq(rows[0].pressSteps[1].changeTo.name, 'yellow', 'copy1 interior change preserved');
+    eq(rows[2].pressSteps[1].changeTo.name, 'yellow', 'copy2 interior change preserved');
+  }
+
+  // ---- sectionInstances (jump targets, copy-aware) ----
+  {
+    const parsed = C.parsePattern(['[Ears] x2', '1: 3 sc (3)', '2: 3 sc (3)', '[Tail]', '1: 3 sc (3)'].join('\n'));
+    const inst = C.sectionInstances(parsed);
+    eq(inst.length, 3, 'two Ears copies + one Tail = 3 instances');
+    eq(inst[0].name, 'Ears', 'inst 0 is Ears');
+    eq(inst[0].copyIndex + '/' + inst[0].copyTotal, '1/2', 'inst 0 is copy 1 of 2');
+    eq(inst[1].copyIndex + '/' + inst[1].copyTotal, '2/2', 'inst 1 is copy 2 of 2');
+    eq(inst[2].name, 'Tail', 'inst 2 is Tail');
+    eq(inst[0].rows.length, 2, 'each Ears copy has 2 rows');
+    // The row-2 block index of copy 2 must differ from copy 1 (distinct jump target).
+    const copy1r2 = inst[0].rows.find(r => r.rowNumber === 2);
+    const copy2r2 = inst[1].rows.find(r => r.rowNumber === 2);
+    assert(copy1r2.index !== copy2r2.index, 'copy 1 and copy 2 row 2 have distinct block indices');
+  }
+  {
+    // No sections at all -> a single nameless instance holding every row.
+    const parsed = C.parsePattern(['1: 3 sc (3)', '2: 3 sc (3)'].join('\n'));
+    const inst = C.sectionInstances(parsed);
+    eq(inst.length, 1, 'section-less pattern -> one instance');
+    eq(inst[0].name, null, 'nameless instance');
+    eq(inst[0].rows.length, 2, 'holds all rows');
+  }
+
+  // ---- Converter-shaped DSL parses cleanly ----
+  {
+    const dsl = [
+      'color yellow = #e5a50a',
+      '[Head] x1',
+      'color: cream',
+      '1: 6 sc in MR (6)',
+      'color: yellow',
+      '2: 6 inc (12)',
+      '3: 4 sc, color: brown, 8 sc (12)',
+      '[Ears] x2',
+      '1: 6 sc in MR (6)',
+      '[Assembly]',
+      'note: Attach each ear to the mane.',
+    ].join('\n');
+    const { errors, warnings, blocks } = C.parsePattern(dsl);
+    eq(errors.length, 0, 'converter DSL: no errors');
+    eq(warnings.length, 0, 'converter DSL: no total warnings');
+    // Head has 3 rows; [Ears] x2 has 1 row duplicated to 2; total 5.
+    eq(blocks.filter(b => b.type === 'row').length, 5, 'Head 3 rows + Ears 1 row x2 = 5');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;

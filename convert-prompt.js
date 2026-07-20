@@ -17,6 +17,9 @@ Each line is either blank, a section header, a note, or a row.
   Row:              <N>: <inst-list> (<count>)
   Row range:        <N>-<M>: <inst-list> (<count>)
   Custom stitch:    def <name> [(<count>)] = <description>
+  Colour switch:    color: <name>        (own line before a round, OR inline in a row's inst-list)
+  Colour swatch:    color <name> = #hex  (optional; pins the dot colour)
+  Repeated piece:   [SECTION NAME] x <N> (e.g. "[Ears] x2" for "make 2")
 
 A \`def\` line declares a pattern-specific stitch (e.g. a bobble or picot) that
 is not in the standard token table. It is OPAQUE: one press, not broken into
@@ -27,6 +30,14 @@ to the user. Put def lines at the TOP, before the sections that use them. Once
 defined, use <name> in rows exactly like any other token.
 When checking the row's (N) total, count each use of <name> as its declared
 <count> (1 if omitted, 0 if declared (0)).
+
+\`color: <name>\` sets the working yarn colour from that point on. Put it on its
+own line BEFORE the round where the colour begins; for a change partway through
+a round, place \`color: <name>\` inline in that row's comma list
+(e.g. \`12: 5 sc, color: brown, 5 sc (10)\`). It adds nothing to the row's (N)
+total. <name> is a lowercase colour word (brown, cream, yellow, white, …).
+Optionally declare \`color <name> = #hex\` once at the top to pin the exact shade.
+\`[NAME] x N\` means "make N of this piece" (from "make 2", "make 4", "×2").
 
 An <inst-list> is a comma-separated list of instructions. Each instruction is one of:
 
@@ -104,7 +115,10 @@ TRANSLATION RULES — source phrase  ->  DSL
   "chain N" at the start of a flat piece (counts as sts) ->  "ch N"  (N becomes the row total)
   "fasten off" / "FO and weave in"                       ->  \`note: ...\` paragraph
   ALL-CAPS part name on its own line                     ->  \`[NAME]\` section header
-  "(white yarn)" / "with white yarn" / "switch to red"   ->  \`note: Use white yarn.\` etc.
+  "(white yarn)" / "with white yarn" / "using color A (yellow)"  ->  color: white  (place before the round it starts)
+  "switch to red yarn" / "change to red" mid-round               ->  inline "color: red" in that row's list
+  "(make 2)" / "make 4" / "×2" beside a part name                ->  "[NAME] x N"
+  finishing / assembly / attaching instructions                  ->  an [ASSEMBLY] section, one note: per step
   Paragraphs (TIPs, stuffing, fasten-off, etc.)          ->  \`note:\` (single-line) or \`note: """..."""\` (multi-line)
   Round numbers listed above the instructions in a column ->  pair them up in order
   "X = ..." or "(ab = ...)" defining a stitch abbreviation -> a \`def\` line; then use the token X/ab in rows
@@ -116,7 +130,9 @@ MANDATORY TRANSLATION DISCIPLINE
 ============================================================
 
 1. NEVER copy English prose into a row. Inside a row you may emit ONLY the tokens in the
-   grammar table. Move every prose phrase to a \`note:\` line.
+   grammar table. Move every prose phrase to a \`note:\` line. The ONE exception: an inline
+   \`color: <name>\` switch IS allowed inside a row's comma list (it is not prose — it is a
+   grammar token; see Colour switch above).
 2. DROP boilerplate phrases that don't change the stitch sequence:
      "in first 3 sts", "in next 3 sts", "in last st", "in each st around", "to join",
      "here and throughout", "around", "in same st".
@@ -160,7 +176,7 @@ Rnd 2. 6 inc (12)
 
 Output:
 [HEAD & BODY]
-note: With green yarn.
+color: green
 note: Keep track of where you are by placing a stitch marker in the first stitch of the current round.
 1: 6 sc in MR (6)
 2: 6 inc (12)
@@ -170,7 +186,7 @@ note: Stuff the piece, shaping it like an egg.
 note: Fasten off, weave in ends.
 
 [BELLY]
-note: With white yarn.
+color: white
 1: 6 sc in MR (6)
 2: 6 inc (12)
 
@@ -221,10 +237,10 @@ Fasten off and weave in the tails.
 Output:
 [CLOAK]
 note: With white and red yarn.
-note: Use white yarn.
+color: white
 1: ch 31 (31)
 2: 30 sc, tch 1, turn (30)
-note: Switch to red yarn.
+color: red
 3: [3 sc blo, dec blo] x 6, tch 1, turn (24)
 note: Fasten off and weave in the tails.
 
@@ -266,7 +282,7 @@ Round 5
 
 Output:
 [MUSHROOM TOP]
-note: Use red or brown yarn.
+color: brown
 note: The Ch1 at the end of each round does NOT count as a stitch (here and throughout).
 1: 8 sc in MR, join, tch 1 (8)
 2: 8 inc, join, tch 1 (16)
@@ -277,11 +293,54 @@ Fasten off, leaving a long tail for sewing. Using white yarn, add knots to make 
 """
 
 [MUSHROOM BOTTOM]
-note: Use white yarn.
+color: white
 1: 8 sc in MR, join, tch 1 (8)
 2: 3 sc, inc, 3 sc, inc, join, tch 1 (10)
 3-4: 10 sc, join, tch 1 (10)
 5: 3 sc, dec, 3 sc, dec, join, tch 1 (8)
+
+============================================================
+WORKED EXAMPLE 4 — colour switch, make-N piece, assembly section
+============================================================
+
+Input:
+LION
+
+HEAD
+Using cream yarn.
+Rnd 1. 6 sc in a magic ring (6)
+Switch to yellow yarn.
+Rnd 2. 6 inc (12)
+Rnd 3. 4 sc, then switch to brown yarn for the mane, 8 sc (12)
+
+EARS (make 2)
+Rnd 1. 6 sc in a magic ring (6)
+
+FINISHING
+Attach each ear to the mane.
+
+Output:
+color yellow = #e5a50a
+
+[HEAD]
+color: cream
+1: 6 sc in MR (6)
+color: yellow
+2: 6 inc (12)
+3: 4 sc, color: brown, 8 sc (12)
+
+[EARS] x2
+1: 6 sc in MR (6)
+
+[ASSEMBLY]
+note: Attach each ear to the mane.
+
+Notes on this example:
+- \`color: cream\` sits on its own line before Rnd 1 because the whole round is cream.
+- \`color: brown\` sits INLINE inside row 3's list because the colour changes partway
+  through that round (after 4 sc); it adds nothing to the row's (12) total.
+- "EARS (make 2)" becomes \`[EARS] x2\` — one section, worked twice.
+- The finishing instruction becomes an \`[ASSEMBLY]\` section with one \`note:\` per step.
 
 ============================================================
 Now convert the user's pattern below. Output ONLY the DSL.

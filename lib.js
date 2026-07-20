@@ -28,12 +28,49 @@
     'turn':  { presses: 1, outputDelta: [0], labels: ['↩ turn the work'] },
   };
 
+  // ---- Colour ----
+  // Small table of common yarn colour words -> a representative swatch hex.
+  // Used to draw the colour dot when the pattern doesn't pin an exact hex.
+  const COLOR_WORDS = {
+    white: '#f7f7f2', cream: '#f2e2c4', ivory: '#fffff0', beige: '#e8dcc4',
+    tan: '#d2b48c', buff: '#e8c99b', brown: '#6b4a2e', black: '#2b2b2b',
+    grey: '#9aa0a6', gray: '#9aa0a6', yellow: '#e5a50a', gold: '#d4af37',
+    orange: '#e8730c', red: '#c0392b', pink: '#e79ab0', rose: '#c76b7f',
+    purple: '#7d5ba6', blue: '#3a6ea5', green: '#3e8e5a', mint: '#9fd8b0',
+    teal: '#2a9d8f',
+  };
+
+  function isHex(s) { return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s); }
+
+  // name -> { name, hex }. Palette (pattern-declared) wins; then COLOR_WORDS;
+  // then hex:null (UI draws a neutral ring).
+  function resolveColour(name, palette) {
+    const key = String(name).toLowerCase();
+    const raw = palette && palette[key];
+    if (raw != null) {
+      if (isHex(raw)) return { name: key, hex: raw.toLowerCase() };
+      return { name: key, hex: COLOR_WORDS[String(raw).toLowerCase()] || null };
+    }
+    return { name: key, hex: COLOR_WORDS[key] || null };
+  }
+
+  // Set the running colour. If there's a preceding anchor-eligible stitch in a
+  // DIFFERENT colour, mark it as where the crocheter completes the switch.
+  function applyColourSwitch(ctx, name, palette) {
+    if (!ctx) return;
+    const col = resolveColour(name, palette);
+    if (ctx.last && (!ctx.last.color || ctx.last.color.name !== col.name)) {
+      ctx.last.changeTo = col;
+    }
+    ctx.current = col;
+  }
+
   // Names a pattern may NOT use for a custom `def` — built-in tokens plus the
   // grammar words the parser reserves.
   const RESERVED_NAMES = new Set([
     ...HEIGHTS,
     'ch', 'tch', 'sl st', 'slst', 'join', 'mr', 'fo', 'turn',
-    'inc', 'dec', 'tog', 'in', 'blo', 'flo', 'x', 'def', 'note',
+    'inc', 'dec', 'tog', 'in', 'blo', 'flo', 'x', 'def', 'note', 'color',
   ]);
 
   function normalizeStitchName(s) {
@@ -59,6 +96,9 @@
     const lines = (text || '').split('\n');
     const { custom, errors: defErrors } = collectCustomStitches(lines);
     for (const e of defErrors) errors.push(e);
+    const { palette, errors: palErrors } = collectPalette(lines);
+    for (const e of palErrors) errors.push(e);
+    const colourCtx = { current: null, last: null };
     let currentSection = null;
     // Section block whose `intro` we should fold notes into. Cleared as soon
     // as we see a row in that section.
@@ -90,14 +130,24 @@
       // `def` lines were consumed by the pre-pass; they produce no block.
       if (/^def\b/i.test(stripped)) { i++; continue; }
 
-      // Section header: [NAME]
-      let m = stripped.match(/^\[(.+)\]$/);
+      // Palette declarations were consumed by the pre-pass; skip (raw match so
+      // a #hex value isn't confused with a comment).
+      if (/^\s*color\s+[a-z][a-z0-9]*\s*=/i.test(raw)) { i++; continue; }
+
+      // Standalone colour switch between rows.
+      let cm = stripped.match(/^color:\s*([a-z][a-z0-9]*)$/i);
+      if (cm) { applyColourSwitch(colourCtx, cm[1], palette); i++; continue; }
+
+      // Section header: [NAME] or [NAME] x2
+      let m = stripped.match(/^\[(.+?)\]\s*(?:x\s*(\d+))?$/i);
       if (m) {
         currentSection = m[1].trim();
+        const repeat = m[2] ? parseInt(m[2], 10) : 1;
         const sectionBlock = {
           type: 'section',
           name: currentSection,
           section: currentSection,
+          repeat,
           intro: [],
           rawLine: raw,
           expectedTotal: 0,
@@ -105,6 +155,7 @@
         };
         blocks.push(sectionBlock);
         pendingSectionBlock = sectionBlock;
+        colourCtx.last = null;
         i++;
         continue;
       }
@@ -165,7 +216,7 @@
       const start = parsed.rangeStart;
       const end = parsed.rangeEnd == null ? parsed.rangeStart : parsed.rangeEnd;
       for (let r = start; r <= end; r++) {
-        const pressSteps = expandInstructions(parsed.instructions, custom);
+        const pressSteps = expandInstructions(parsed.instructions, custom, palette, colourCtx);
         const computedTotal = pressSteps.reduce((a, s) => a + s.outputDelta, 0);
         if (parsed.expectedTotal != null && parsed.expectedTotal !== computedTotal) {
           warnings.push({
@@ -189,11 +240,12 @@
       i++;
     }
 
+    const finalBlocks = expandRepeats(blocks);
     return {
-      blocks,
+      blocks: finalBlocks,
       errors,
       warnings,
-      rows: blocks.filter(b => b.type === 'row'),
+      rows: finalBlocks.filter(b => b.type === 'row'),
     };
   }
 
@@ -228,6 +280,27 @@
       custom[def.name] = def;
     }
     return { custom, errors };
+  }
+
+  // Pre-pass: scan raw lines for palette declarations "color NAME = VALUE".
+  // Matched on RAW lines (not comment-stripped) because a #hex value would
+  // otherwise be eaten by the `#`-comment rule. A trailing `# comment` after
+  // the value is still tolerated by anchoring the value capture.
+  function collectPalette(lines) {
+    const palette = Object.create(null);
+    const errors = [];
+    const RE = /^\s*color\s+([a-z][a-z0-9]*)\s*=\s*(#[0-9a-f]{3}|#[0-9a-f]{6}|[a-z][a-z0-9]*)\s*(?:#.*)?$/i;
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(RE);
+      if (!m) continue;
+      const name = m[1].toLowerCase();
+      if (palette[name]) {
+        errors.push({ line: i + 1, message: 'Duplicate colour definition: "' + name + '"', raw: lines[i] });
+        continue;
+      }
+      palette[name] = m[2];
+    }
+    return { palette, errors };
   }
 
   function parseLine(line, custom = Object.create(null)) {
@@ -271,6 +344,11 @@
 
   function parseInst(text, custom = Object.create(null)) {
     text = text.trim();
+    // Inline colour switch: "color: brown". Emits no stitch; flips running colour.
+    const colourInline = text.match(/^color:\s*([a-z][a-z0-9]*)$/i);
+    if (colourInline) {
+      return { type: 'colour', name: colourInline[1].toLowerCase() };
+    }
     const groupMatch = text.match(/^\[(.+)\]\s*x\s*(\d+)$/i);
     if (groupMatch) {
       return {
@@ -407,23 +485,38 @@
     return steps;
   }
 
-  function expandInstructions(insts, custom = Object.create(null)) {
+  // Stitches that don't represent a pulled loop — never the colour-change anchor.
+  const ANCHOR_SKIP = new Set(['mr', 'join', 'tch', 'turn', 'fo']);
+
+  function expandInstructions(insts, custom = Object.create(null), palette = Object.create(null), ctx = null) {
     const steps = [];
+    function emit(s) {
+      s.color = ctx ? ctx.current : null;
+      steps.push(s);
+      if (ctx) {
+        if (s.stitch === 'fo') ctx.last = null;           // end of piece
+        else if (!ANCHOR_SKIP.has(s.stitch)) ctx.last = s; // eligible anchor
+      }
+    }
     for (const inst of insts) {
+      if (inst.type === 'colour') {
+        applyColourSwitch(ctx, inst.name, palette);
+        continue;
+      }
       if (inst.type === 'group') {
-        const inner = expandInstructions(inst.instructions, custom);
+        // Re-run expansion per repetition (instead of expand-once-and-copy) so
+        // colour + anchors thread correctly through repeated groups. Produces
+        // identical steps to the old copy loop when there is no colour.
         for (let i = 0; i < inst.repeat; i++) {
-          for (const s of inner) steps.push({
-            stitch: s.stitch, label: s.label, outputDelta: s.outputDelta,
-            modifier: s.modifier || null, definition: s.definition,
-          });
+          const inner = expandInstructions(inst.instructions, custom, palette, ctx);
+          for (const s of inner) steps.push(s);
         }
       } else {
         if (inst.inMR) {
-          steps.push({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null, definition: null });
+          emit({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null, definition: null });
         }
         for (let i = 0; i < inst.count; i++) {
-          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier, custom)) steps.push(s);
+          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier, custom)) emit(s);
         }
       }
     }
@@ -589,6 +682,36 @@
     return names;
   }
 
+  // Distinct jumpable section instances, in order. Unlike `sectionsOf` (which
+  // dedupes by name), each "make N" copy is its OWN instance, so a jump target
+  // can land on the 2nd ear specifically. Each instance carries the block index
+  // of its section header (or -1 for a leading section-less run), its
+  // copyIndex/copyTotal, and the row blocks that belong to it (with their block
+  // indices, so a jump can seek straight to a given row within THIS copy).
+  function sectionInstances(parsed) {
+    const out = [];
+    let cur = null;
+    parsed.blocks.forEach((b, i) => {
+      if (b.type === 'section') {
+        cur = {
+          headerIndex: i,
+          name: b.name,
+          copyIndex: b.copyIndex || 1,
+          copyTotal: b.copyTotal || 1,
+          rows: [],
+        };
+        out.push(cur);
+      } else if (b.type === 'row') {
+        if (!cur) {
+          cur = { headerIndex: -1, name: b.section != null ? b.section : null, copyIndex: 1, copyTotal: 1, rows: [] };
+          out.push(cur);
+        }
+        cur.rows.push({ block: b, index: i, rowNumber: b.rowNumber });
+      }
+    });
+    return out;
+  }
+
   // Section that the previous *row* belongs to, if any. Used for the
   // "Finished X · Next: Y" header on section blocks.
   function previousSectionName(parsed, blockIndex) {
@@ -608,6 +731,69 @@
       if (b.type === 'row' && b.section === sectionName) last = b;
     }
     return last;
+  }
+
+  // Deep-enough clone of a block for a "make N" copy: fresh pressStep objects
+  // (so cursor indices are independent) with colour/changeTo refs preserved.
+  function cloneBlockWithCopy(block, copyIndex, copyTotal) {
+    const clone = Object.assign({}, block, {
+      copyIndex,
+      copyTotal,
+      pressSteps: block.pressSteps.map(s => Object.assign({}, s)),
+    });
+    if (block.intro) clone.intro = block.intro.slice();
+    return clone;
+  }
+
+  // The last anchor-eligible press-step across a run of blocks — the same step
+  // colour threading would have left as its anchor at the run's end.
+  function lastAnchorStep(blocks) {
+    for (let bi = blocks.length - 1; bi >= 0; bi--) {
+      const steps = blocks[bi].pressSteps || [];
+      for (let si = steps.length - 1; si >= 0; si--) {
+        const s = steps[si];
+        if (s.stitch === 'section' || s.stitch === 'note') continue;
+        if (ANCHOR_SKIP.has(s.stitch)) continue;
+        return s;
+      }
+    }
+    return null;
+  }
+
+  // Post-pass: for each section with repeat > 1, duplicate its run of blocks
+  // (the section block + all following blocks up to the next section) N times.
+  function expandRepeats(blocks) {
+    // Note: colour is threaded once over the literal source BEFORE this runs, so a
+    // piece that ends in a different colour than it starts carries no colour-change
+    // prompt at the seam between copies. That's intentional — you fasten off and
+    // rejoin between repeated pieces, so there is no yarn-over colour change there.
+    const out = [];
+    let i = 0;
+    while (i < blocks.length) {
+      const b = blocks[i];
+      if (b.type === 'section' && b.repeat && b.repeat > 1) {
+        const run = [b];
+        let j = i + 1;
+        while (j < blocks.length && blocks[j].type !== 'section') { run.push(blocks[j]); j++; }
+        for (let c = 1; c <= b.repeat; c++) {
+          const copyBlocks = run.map(rb => cloneBlockWithCopy(rb, c, b.repeat));
+          if (c < b.repeat) {
+            // A changeTo anchored on the run's trailing edge (set by a colour
+            // switch that comes AFTER the whole repeated section) belongs only
+            // to the final copy — clear it on every earlier copy. Interior
+            // (mid-run) changeTo anchors are untouched.
+            const anchor = lastAnchorStep(copyBlocks);
+            if (anchor && anchor.changeTo) delete anchor.changeTo;
+          }
+          for (const cb of copyBlocks) out.push(cb);
+        }
+        i = j;
+      } else {
+        out.push(b);
+        i++;
+      }
+    }
+    return out;
   }
 
   // Clamp a cursor to valid positions for `parsed`, repairing anything out of
@@ -679,6 +865,7 @@
   const api = {
     HEIGHTS,
     SPECIALS,
+    COLOR_WORDS,
     parsePattern,
     parseLine,
     parseInstList,
@@ -697,10 +884,14 @@
     currentMode,
     rowsOf,
     sectionsOf,
+    sectionInstances,
     previousSectionName,
     lastRowOfSection,
     normalizeCursor,
     clampCursor,
+    resolveColour,
+    collectPalette,
+    applyColourSwitch,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

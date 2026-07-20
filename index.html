@@ -186,6 +186,14 @@
       color: #001; background: rgba(255,255,255,0.6); padding: 7px 14px; border-radius: 999px;
     }
     .big-button.compact .stitch-def { font-size: 12px; margin-top: 8px; padding: 4px 10px; }
+    .colour-dot { display:inline-block; width:12px; height:12px; border-radius:50%;
+      vertical-align:middle; margin-right:6px; border:1px solid rgba(0,0,0,0.3); }
+    .colour-dot.empty { background:transparent; }
+    .colour-chip { margin-top:8px; font-size:14px; color:#001; display:inline-flex;
+      align-items:center; gap:2px; opacity:0.85; }
+    .colour-switch { margin-top:8px; font-size:14px; font-weight:700; color:#001;
+      background:rgba(255,255,255,0.7); padding:6px 12px; border-radius:999px;
+      display:inline-flex; align-items:center; gap:4px; }
 
     .tracker-actions { display: flex; gap: 8px; margin-top: 12px; }
     .tracker-actions .btn { flex: 1; }
@@ -281,22 +289,22 @@
     function loadLlmCfg() { return readJSON(LLM_KEY, {}); }
     function saveLlmCfg(c) { writeJSON(LLM_KEY, c); }
     const DEFAULT_LLM_MODEL = 'anthropic/claude-haiku-4.5';
+    const LLM_MODELS = [
+      { id: 'anthropic/claude-haiku-4.5', label: 'Claude Haiku 4.5 — fast & cheap (default)' },
+      { id: 'anthropic/claude-sonnet-4.6', label: 'Claude Sonnet — stronger' },
+      { id: 'anthropic/claude-opus-4.7', label: 'Claude Opus — strongest, for hard patterns' },
+    ];
+    const LLM_MAX_TOKENS = 32000;
 
-    async function llmConvert(rawText, key, model, thinking) {
+    async function llmConvert(rawText, key, model, thinking, onDelta) {
       const body = {
         model: model || DEFAULT_LLM_MODEL,
         messages: [{ role: 'user', content: CONVERT_PROMPT + rawText }],
         temperature: 0,
-        max_tokens: 4000,
+        max_tokens: LLM_MAX_TOKENS,
+        stream: true,
       };
-      // OpenRouter `reasoning` param: gives the model a scratchpad on supported
-      // models (Anthropic Claude, OpenAI o-series, etc.). The thinking lands in
-      // a separate channel so it doesn't pollute the DSL output we read from
-      // `content`. Defaults to "low" effort — small cost bump, useful quality
-      // gain on verbose pattern conversions.
-      if (thinking !== false) {
-        body.reasoning = { effort: 'low' };
-      }
+      if (thinking !== false) body.reasoning = { effort: 'low' };
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -313,15 +321,45 @@
         try { detail = JSON.parse(t).error?.message || t; } catch (e) {}
         throw new Error('OpenRouter ' + res.status + ': ' + (detail || res.statusText).slice(0, 240));
       }
-      const data = await res.json();
-      let out = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-      out = out.trim();
-      // Strip ``` fences if the model included them despite the instruction
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '', content = '', reasoning = '', finishReason = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep the (possibly partial) last line
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t.startsWith('data:')) continue; // skip blank lines and ": keep-alive" comments
+          const payload = t.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          let json;
+          try { json = JSON.parse(payload); } catch (e) { continue; }
+          if (json.error) {
+            throw new Error('OpenRouter: ' + (json.error.message || 'stream error'));
+          }
+          const choice = json.choices && json.choices[0];
+          if (!choice) continue;
+          const delta = choice.delta || {};
+          if (delta.content) { content += delta.content; if (onDelta) onDelta({ content: delta.content, reasoning: '' }); }
+          if (delta.reasoning) { reasoning += delta.reasoning; if (onDelta) onDelta({ content: '', reasoning: delta.reasoning }); }
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+        }
+      }
+      if (finishReason === 'length') {
+        throw new Error('The model hit the output limit and the pattern was cut off. Try converting a shorter section, or pick a model with a larger output limit.');
+      }
+      let out = content.trim();
       if (out.startsWith('```')) {
-        const lines = out.split('\n');
-        if (lines[lines.length - 1].startsWith('```')) lines.pop();
-        lines.shift();
-        out = lines.join('\n').trim();
+        const outLines = out.split('\n');
+        if (outLines[outLines.length - 1].startsWith('```')) outLines.pop();
+        outLines.shift();
+        out = outLines.join('\n').trim();
+      }
+      if (!out) {
+        throw new Error('The model returned an empty conversion — please try again, or pick a different model.');
       }
       return out;
     }
@@ -455,6 +493,11 @@
       return e;
     }
     function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+    function colourDot(hex) {
+      const d = el('span', { class: 'colour-dot' });
+      if (hex) d.style.background = hex; else d.classList.add('empty');
+      return d;
+    }
 
     // ---- Routing ----
     function route() { return location.hash || '#/'; }
@@ -676,12 +719,17 @@
           );
         } else if (mode === 'section') {
           infoCard.classList.add('section');
-          const prevName = C.previousSectionName(parsed, cur.blockIndex);
-          const title = prevName
-            ? 'Finished ' + prevName + ' · Next: ' + block.name
-            : 'Starting ' + block.name;
+          let eyebrow, title;
+          if (block.copyTotal > 1) {
+            eyebrow = '🧶 Piece ' + block.copyIndex + ' of ' + block.copyTotal;
+            title = block.name + ' · ' + block.copyIndex + ' of ' + block.copyTotal;
+          } else {
+            const prevName = C.previousSectionName(parsed, cur.blockIndex);
+            eyebrow = prevName ? '✨ Next part' : '✨ First part';
+            title = prevName ? 'Finished ' + prevName + ' · Next: ' + block.name : 'Starting ' + block.name;
+          }
           const children = [
-            el('div', { class: 'info-card-eyebrow' }, prevName ? '✨ Next part' : '✨ First part'),
+            el('div', { class: 'info-card-eyebrow' }, eyebrow),
             el('div', { class: 'info-card-title' }, title),
           ];
           for (const intro of (block.intro || [])) {
@@ -691,13 +739,21 @@
           infoCard.append(...children);
         } else if (mode === 'note') {
           infoCard.classList.add('note');
-          const lastRow = sectionLastRowBefore(parsed, cur.blockIndex, block.section);
-          const where = lastRow ? 'After Row ' + lastRow.rowNumber : 'Before Row 1';
-          const sectionTag = block.section ? block.section + ' · ' : '';
+          const isAssembly = block.section && /^(assembly|finishing)$/i.test(block.section);
+          let eyebrow;
+          if (isAssembly) {
+            const info = noteStepInfo(parsed, block);
+            eyebrow = '☑ ' + block.section + ' · step ' + info.idx + ' of ' + info.total;
+          } else {
+            const lastRow = sectionLastRowBefore(parsed, cur.blockIndex, block.section);
+            const where = lastRow ? 'After Row ' + lastRow.rowNumber : 'Before Row 1';
+            const sectionTag = block.section ? block.section + ' · ' : '';
+            eyebrow = '📝 ' + sectionTag + where;
+          }
           infoCard.append(
-            el('div', { class: 'info-card-eyebrow' }, '📝 ' + sectionTag + where),
+            el('div', { class: 'info-card-eyebrow' }, eyebrow),
             el('div', { class: 'info-card-body' }, block.content),
-            el('div', { class: 'info-card-foot' }, 'Tap below when done reading.'),
+            el('div', { class: 'info-card-foot' }, isAssembly ? 'Tap below when this step is done.' : 'Tap below when done reading.'),
           );
         }
 
@@ -750,6 +806,16 @@
           if (defStep && defStep.definition) {
             bigBtn.appendChild(el('div', { class: 'stitch-def' }, 'ⓘ ' + defStep.definition));
           }
+          const stepColour = defStep && defStep.color;
+          if (stepColour) {
+            bigBtn.appendChild(el('div', { class: 'colour-chip' },
+              colourDot(stepColour.hex), el('span', null, stepColour.name)));
+          }
+          if (defStep && defStep.changeTo) {
+            bigBtn.appendChild(el('div', { class: 'colour-switch' },
+              colourDot(defStep.changeTo.hex),
+              el('span', null, 'Change to ' + defStep.changeTo.name + ' on the final pull-through')));
+          }
           bigBtn.appendChild(el('div', { class: 'hint' }, 'Tap, or press Space / Enter'));
         }
         backBtn.disabled    = done || (cur.blockIndex === 0 && cur.stepIndex === 0 && !cur.markerPending);
@@ -764,6 +830,11 @@
           if (b.type === 'row' && b.section === section) return b;
         }
         return null;
+      }
+
+      function noteStepInfo(parsed, block) {
+        const notes = parsed.blocks.filter(b => b.type === 'note' && b.section === block.section);
+        return { idx: notes.indexOf(block) + 1, total: notes.length };
       }
 
       function flashPress() {
@@ -871,60 +942,71 @@
       const scrim = makeScrim();
       const close = () => document.body.removeChild(scrim);
 
-      const sections = C.sectionsOf(parsed);
-      // Find the current row + section for sensible defaults
-      let curBlock = parsed.blocks[project.cursor.blockIndex];
-      let curRow = curBlock && curBlock.type === 'row' ? curBlock :
-                   (function () {
-                     for (let i = project.cursor.blockIndex - 1; i >= 0; i--) {
-                       if (parsed.blocks[i] && parsed.blocks[i].type === 'row') return parsed.blocks[i];
-                     }
-                     return null;
-                   })();
-      const defaultSection = curRow && curRow.section != null ? curRow.section : sections[0];
-      const defaultRowNum = curRow ? curRow.rowNumber : '';
+      // Copy-aware jump targets: each "make N" copy is its own instance, so you
+      // can land on the 2nd ear specifically. Only instances that contain rows
+      // are jumpable (an assembly-only section has nothing to jump to).
+      const instances = C.sectionInstances(parsed).filter(inst => inst.rows.length);
+      if (!instances.length) { close(); return; }
 
-      function rowsInSection(sec) {
-        return parsed.blocks.filter(b => b.type === 'row' && (b.section || null) === (sec || null));
+      function instanceLabel(inst) {
+        if (inst.name == null) return 'Rows';
+        return inst.name + (inst.copyTotal > 1 ? ' (' + inst.copyIndex + ' of ' + inst.copyTotal + ')' : '');
       }
 
-      let sectionSelect = null;
-      let drawerContents = [];
+      // Default to the instance the cursor is currently in (headerIndex is
+      // monotonic, so the last one at/behind the cursor is the current piece).
+      const cursor = project.cursor;
+      let curInstIdx = 0;
+      instances.forEach((inst, k) => { if (inst.headerIndex <= cursor.blockIndex) curInstIdx = k; });
+      const curBlock = parsed.blocks[cursor.blockIndex];
+      const defaultRowNum = (curBlock && curBlock.type === 'row') ? curBlock.rowNumber
+        : instances[curInstIdx].rows[0].rowNumber;
 
-      if (sections.length > 1) {
+      const drawerContents = [];
+
+      // Piece picker — only when there's more than one instance to choose between.
+      let sectionSelect = null;
+      if (instances.length > 1) {
         sectionSelect = el('select');
-        for (const s of sections) {
+        instances.forEach((inst, k) => {
           const opt = document.createElement('option');
-          opt.value = s; opt.textContent = s;
-          if (s === defaultSection) opt.selected = true;
+          opt.value = String(k); opt.textContent = instanceLabel(inst);
+          if (k === curInstIdx) opt.selected = true;
           sectionSelect.appendChild(opt);
-        }
+        });
         sectionSelect.style.cssText = 'width:100%; padding:12px; border-radius:8px; border:1px solid var(--card-hi); background:var(--card); color:var(--fg); font: inherit;';
         drawerContents.push(el('div', { class: 'muted', style: 'font-size:13px' }, 'Section'), sectionSelect);
       }
 
-      const input = el('input', { type: 'text', placeholder: 'Row number', value: defaultRowNum });
-      function sectionRowsInfo() {
-        const sec = sectionSelect ? sectionSelect.value : (sections[0] || null);
-        const rows = rowsInSection(sec);
-        if (!rows.length) return '';
-        return 'Rows ' + rows[0].rowNumber + '–' + rows[rows.length - 1].rowNumber +
-               (sec ? ' in ' + sec : '');
+      function selectedInstance() {
+        const k = sectionSelect ? parseInt(sectionSelect.value, 10) : curInstIdx;
+        return instances[k] || instances[0];
       }
-      const hint = el('div', { class: 'muted', style: 'font-size:13px' }, sectionRowsInfo());
-      if (sectionSelect) sectionSelect.addEventListener('change', () => { hint.textContent = sectionRowsInfo(); });
+
+      const input = el('input', { type: 'number', placeholder: 'Row number', value: defaultRowNum });
+      const err = el('div', { style: 'font-size:13px; color: var(--warn); min-height:1.1em' });
+      function rangeHint() {
+        const rows = selectedInstance().rows;
+        return 'Rows ' + rows[0].rowNumber + '–' + rows[rows.length - 1].rowNumber;
+      }
+      const hint = el('div', { class: 'muted', style: 'font-size:13px' }, rangeHint());
+      if (sectionSelect) sectionSelect.addEventListener('change', () => {
+        hint.textContent = rangeHint();
+        err.textContent = '';
+        input.value = selectedInstance().rows[0].rowNumber;
+        input.focus();
+      });
 
       function go() {
-        const sec = sectionSelect ? sectionSelect.value : (sections[0] !== undefined ? sections[0] : null);
         const target = parseInt(input.value, 10);
-        if (isNaN(target)) { alert('Enter a row number.'); return; }
-        const idx = parsed.blocks.findIndex(b =>
-          b.type === 'row' && b.rowNumber === target && (b.section || null) === (sec || null));
-        if (idx < 0) {
-          alert('No row ' + target + (sec ? ' in section "' + sec + '"' : '') + '.');
+        if (isNaN(target)) { err.textContent = 'Enter a row number.'; return; }
+        const inst = selectedInstance();
+        const row = inst.rows.find(r => r.rowNumber === target);
+        if (!row) {
+          err.textContent = 'No row ' + target + ' in ' + instanceLabel(inst) + '.';
           return;
         }
-        project.cursor = C.jumpTo(project.cursor, idx, 0);
+        project.cursor = C.jumpTo(project.cursor, row.index, 0);
         saveProject(project);
         close();
         renderTracker(project.id);
@@ -934,6 +1016,7 @@
         el('div', { class: 'muted', style: 'font-size:13px' }, 'Row number'),
         input,
         hint,
+        err,
         el('div', { class: 'row' },
           el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
           el('div', { style: 'flex:1' }),
@@ -947,6 +1030,7 @@
       scrim.appendChild(drawer);
       document.body.appendChild(scrim);
       setTimeout(() => { input.focus(); input.select(); }, 0);
+      input.addEventListener('input', () => { err.textContent = ''; });
       input.addEventListener('keydown', e => { if (e.code === 'Enter') { e.preventDefault(); go(); } });
     }
     function editPattern(project) {
@@ -1002,35 +1086,43 @@
       const raw = el('textarea', { placeholder: 'Paste the original pattern in any format. The AI will convert it to our DSL.' });
       raw.style.minHeight = '180px';
       const status = el('div', { class: 'muted', style: 'font-size:13px;min-height:1.2em' });
+      const thinkingPane = el('pre', { class: 'code-box', style: 'display:none; max-height:120px; overflow:auto; opacity:0.7; font-size:12px' });
+      const outputPane = el('pre', { class: 'code-box', style: 'display:none; max-height:160px; overflow:auto; font-size:12px' });
 
       // Key section — show only if no key stored, plus an "Edit key" toggle
       const keyInput = el('input', { type: 'password', placeholder: 'OpenRouter API key (sk-or-…)' });
-      const modelInput = el('input', { type: 'text', placeholder: 'Model (default: ' + DEFAULT_LLM_MODEL + ')' });
+      const modelSelect = el('select');
+      for (const m of LLM_MODELS) {
+        const opt = document.createElement('option');
+        opt.value = m.id; opt.textContent = m.label;
+        modelSelect.appendChild(opt);
+      }
+      const customOpt = document.createElement('option');
+      customOpt.value = '__custom__'; customOpt.textContent = 'Custom… (enter an OpenRouter model id)';
+      modelSelect.appendChild(customOpt);
+      const modelCustom = el('input', { type: 'text', placeholder: 'e.g. anthropic/claude-3.5-sonnet' });
+      modelCustom.style.display = 'none';
+      function syncModelUI(savedId) {
+        const known = LLM_MODELS.some(m => m.id === savedId);
+        if (savedId && !known) { modelSelect.value = '__custom__'; modelCustom.value = savedId; modelCustom.style.display = ''; }
+        else { modelSelect.value = savedId || DEFAULT_LLM_MODEL; modelCustom.style.display = 'none'; }
+      }
+      modelSelect.addEventListener('change', () => {
+        modelCustom.style.display = modelSelect.value === '__custom__' ? '' : 'none';
+      });
+      function selectedModelId() {
+        return modelSelect.value === '__custom__' ? modelCustom.value.trim() : modelSelect.value;
+      }
       const keyRow = el('div', { class: 'stack' },
         el('div', { class: 'muted', style: 'font-size:13px' }, 'OpenRouter key (stored locally, never sent anywhere except OpenRouter)'),
         keyInput,
-        el('div', { class: 'muted', style: 'font-size:13px;margin-top:4px' }, 'Model (optional)'),
-        modelInput,
-        el('div', { class: 'muted', style: 'font-size:12px' },
-          'Default ' + DEFAULT_LLM_MODEL + ' is fast and cheap. For verbose / unusual patterns ' +
-          'that the default struggles with, try ',
-          (function () {
-            const a = el('a', { href: '#', style: 'color: var(--accent); text-decoration: underline' }, 'anthropic/claude-sonnet-4.6');
-            a.onclick = (e) => { e.preventDefault(); modelInput.value = 'anthropic/claude-sonnet-4.6'; };
-            return a;
-          })(),
-          ' or ',
-          (function () {
-            const a = el('a', { href: '#', style: 'color: var(--accent); text-decoration: underline' }, 'anthropic/claude-opus-4.7');
-            a.onclick = (e) => { e.preventDefault(); modelInput.value = 'anthropic/claude-opus-4.7'; };
-            return a;
-          })(),
-          '.',
-        ),
+        el('div', { class: 'muted', style: 'font-size:13px;margin-top:4px' }, 'Model'),
+        modelSelect,
+        modelCustom,
       );
       const editKeyBtn = el('button', { class: 'btn secondary', onclick: () => {
         keyInput.value = llm.key || '';
-        modelInput.value = llm.model || '';
+        syncModelUI(llm.model || '');
         keyRow.style.display = '';
         editKeyBtn.style.display = 'none';
       } }, '🔑 Edit key');
@@ -1048,6 +1140,7 @@
         }
       }
       refreshKeyUI();
+      syncModelUI(llm.model || '');
 
       // Extended thinking toggle (defaults on)
       const thinkingCheckbox = el('input', { type: 'checkbox' });
@@ -1071,7 +1164,7 @@
         // If key inputs are showing, persist their values
         if (keyRow.style.display !== 'none') {
           const k = keyInput.value.trim();
-          const m = modelInput.value.trim();
+          const m = selectedModelId();
           if (!k) { status.textContent = 'Enter your OpenRouter key first.'; return; }
           const prev = loadLlmCfg();
           saveLlmCfg({ key: k, model: m, thinking: prev.thinking !== false });
@@ -1083,8 +1176,14 @@
         busy = true;
         convertBtn.disabled = true;
         status.textContent = (llm.thinking !== false) ? 'Converting (with thinking)…' : 'Converting…';
+        thinkingPane.textContent = ''; outputPane.textContent = '';
+        thinkingPane.style.display = ''; outputPane.style.display = '';
+        const onDelta = ({ content, reasoning }) => {
+          if (reasoning) { thinkingPane.textContent += reasoning; thinkingPane.scrollTop = thinkingPane.scrollHeight; }
+          if (content) { outputPane.textContent += content; outputPane.scrollTop = outputPane.scrollHeight; }
+        };
         try {
-          const out = await llmConvert(rawText, llm.key, llm.model, llm.thinking !== false);
+          const out = await llmConvert(rawText, llm.key, llm.model, llm.thinking !== false, onDelta);
           targetTextarea.value = out;
           targetTextarea.dispatchEvent(new Event('input'));
           close();
@@ -1113,6 +1212,8 @@
         editKeyBtn,
         keyRow,
         thinkingRow,
+        thinkingPane,
+        outputPane,
         status,
         el('div', { class: 'row' },
           el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
