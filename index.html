@@ -337,6 +337,9 @@
           if (payload === '[DONE]') continue;
           let json;
           try { json = JSON.parse(payload); } catch (e) { continue; }
+          if (json.error) {
+            throw new Error('OpenRouter: ' + (json.error.message || 'stream error'));
+          }
           const choice = json.choices && json.choices[0];
           if (!choice) continue;
           const delta = choice.delta || {};
@@ -354,6 +357,9 @@
         if (outLines[outLines.length - 1].startsWith('```')) outLines.pop();
         outLines.shift();
         out = outLines.join('\n').trim();
+      }
+      if (!out) {
+        throw new Error('The model returned an empty conversion — please try again, or pick a different model.');
       }
       return out;
     }

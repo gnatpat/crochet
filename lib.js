@@ -733,6 +733,10 @@
   // Post-pass: for each section with repeat > 1, duplicate its run of blocks
   // (the section block + all following blocks up to the next section) N times.
   function expandRepeats(blocks) {
+    // Note: colour is threaded once over the literal source BEFORE this runs, so a
+    // piece that ends in a different colour than it starts carries no colour-change
+    // prompt at the seam between copies. That's intentional — you fasten off and
+    // rejoin between repeated pieces, so there is no yarn-over colour change there.
     const out = [];
     let i = 0;
     while (i < blocks.length) {
