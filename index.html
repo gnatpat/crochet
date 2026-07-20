@@ -186,6 +186,14 @@
       color: #001; background: rgba(255,255,255,0.6); padding: 7px 14px; border-radius: 999px;
     }
     .big-button.compact .stitch-def { font-size: 12px; margin-top: 8px; padding: 4px 10px; }
+    .colour-dot { display:inline-block; width:12px; height:12px; border-radius:50%;
+      vertical-align:middle; margin-right:6px; border:1px solid rgba(0,0,0,0.3); }
+    .colour-dot.empty { background:transparent; }
+    .colour-chip { margin-top:8px; font-size:14px; color:#001; display:inline-flex;
+      align-items:center; gap:2px; opacity:0.85; }
+    .colour-switch { margin-top:8px; font-size:14px; font-weight:700; color:#001;
+      background:rgba(255,255,255,0.7); padding:6px 12px; border-radius:999px;
+      display:inline-flex; align-items:center; gap:4px; }
 
     .tracker-actions { display: flex; gap: 8px; margin-top: 12px; }
     .tracker-actions .btn { flex: 1; }
@@ -455,6 +463,11 @@
       return e;
     }
     function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+    function colourDot(hex) {
+      const d = el('span', { class: 'colour-dot' });
+      if (hex) d.style.background = hex; else d.classList.add('empty');
+      return d;
+    }
 
     // ---- Routing ----
     function route() { return location.hash || '#/'; }
@@ -749,6 +762,16 @@
             ? defBlock.pressSteps[cur.stepIndex] : null;
           if (defStep && defStep.definition) {
             bigBtn.appendChild(el('div', { class: 'stitch-def' }, 'ⓘ ' + defStep.definition));
+          }
+          const stepColour = defStep && defStep.color;
+          if (stepColour) {
+            bigBtn.appendChild(el('div', { class: 'colour-chip' },
+              colourDot(stepColour.hex), el('span', null, stepColour.name)));
+          }
+          if (defStep && defStep.changeTo) {
+            bigBtn.appendChild(el('div', { class: 'colour-switch' },
+              colourDot(defStep.changeTo.hex),
+              el('span', null, 'Change to ' + defStep.changeTo.name + ' on the final pull-through')));
           }
           bigBtn.appendChild(el('div', { class: 'hint' }, 'Tap, or press Space / Enter'));
         }
