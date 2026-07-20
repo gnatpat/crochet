@@ -54,6 +54,17 @@
     return { name: key, hex: COLOR_WORDS[key] || null };
   }
 
+  // Set the running colour. If there's a preceding anchor-eligible stitch in a
+  // DIFFERENT colour, mark it as where the crocheter completes the switch.
+  function applyColourSwitch(ctx, name, palette) {
+    if (!ctx) return;
+    const col = resolveColour(name, palette);
+    if (ctx.last && (!ctx.last.color || ctx.last.color.name !== col.name)) {
+      ctx.last.changeTo = col;
+    }
+    ctx.current = col;
+  }
+
   // Names a pattern may NOT use for a custom `def` — built-in tokens plus the
   // grammar words the parser reserves.
   const RESERVED_NAMES = new Set([
@@ -85,6 +96,9 @@
     const lines = (text || '').split('\n');
     const { custom, errors: defErrors } = collectCustomStitches(lines);
     for (const e of defErrors) errors.push(e);
+    const { palette, errors: palErrors } = collectPalette(lines);
+    for (const e of palErrors) errors.push(e);
+    const colourCtx = { current: null, last: null };
     let currentSection = null;
     // Section block whose `intro` we should fold notes into. Cleared as soon
     // as we see a row in that section.
@@ -116,6 +130,14 @@
       // `def` lines were consumed by the pre-pass; they produce no block.
       if (/^def\b/i.test(stripped)) { i++; continue; }
 
+      // Palette declarations were consumed by the pre-pass; skip (raw match so
+      // a #hex value isn't confused with a comment).
+      if (/^\s*color\s+[a-z][a-z0-9]*\s*=/i.test(raw)) { i++; continue; }
+
+      // Standalone colour switch between rows.
+      let cm = stripped.match(/^color:\s*([a-z][a-z0-9]*)$/i);
+      if (cm) { applyColourSwitch(colourCtx, cm[1], palette); i++; continue; }
+
       // Section header: [NAME]
       let m = stripped.match(/^\[(.+)\]$/);
       if (m) {
@@ -131,6 +153,7 @@
         };
         blocks.push(sectionBlock);
         pendingSectionBlock = sectionBlock;
+        colourCtx.last = null;
         i++;
         continue;
       }
@@ -191,7 +214,7 @@
       const start = parsed.rangeStart;
       const end = parsed.rangeEnd == null ? parsed.rangeStart : parsed.rangeEnd;
       for (let r = start; r <= end; r++) {
-        const pressSteps = expandInstructions(parsed.instructions, custom);
+        const pressSteps = expandInstructions(parsed.instructions, custom, palette, colourCtx);
         const computedTotal = pressSteps.reduce((a, s) => a + s.outputDelta, 0);
         if (parsed.expectedTotal != null && parsed.expectedTotal !== computedTotal) {
           warnings.push({
@@ -318,6 +341,11 @@
 
   function parseInst(text, custom = Object.create(null)) {
     text = text.trim();
+    // Inline colour switch: "color: brown". Emits no stitch; flips running colour.
+    const colourInline = text.match(/^color:\s*([a-z][a-z0-9]*)$/i);
+    if (colourInline) {
+      return { type: 'colour', name: colourInline[1].toLowerCase() };
+    }
     const groupMatch = text.match(/^\[(.+)\]\s*x\s*(\d+)$/i);
     if (groupMatch) {
       return {
@@ -454,23 +482,38 @@
     return steps;
   }
 
-  function expandInstructions(insts, custom = Object.create(null)) {
+  // Stitches that don't represent a pulled loop — never the colour-change anchor.
+  const ANCHOR_SKIP = new Set(['mr', 'join', 'tch', 'turn', 'fo']);
+
+  function expandInstructions(insts, custom = Object.create(null), palette = Object.create(null), ctx = null) {
     const steps = [];
+    function emit(s) {
+      s.color = ctx ? ctx.current : null;
+      steps.push(s);
+      if (ctx) {
+        if (s.stitch === 'fo') ctx.last = null;           // end of piece
+        else if (!ANCHOR_SKIP.has(s.stitch)) ctx.last = s; // eligible anchor
+      }
+    }
     for (const inst of insts) {
+      if (inst.type === 'colour') {
+        applyColourSwitch(ctx, inst.name, palette);
+        continue;
+      }
       if (inst.type === 'group') {
-        const inner = expandInstructions(inst.instructions, custom);
+        // Re-run expansion per repetition (instead of expand-once-and-copy) so
+        // colour + anchors thread correctly through repeated groups. Produces
+        // identical steps to the old copy loop when there is no colour.
         for (let i = 0; i < inst.repeat; i++) {
-          for (const s of inner) steps.push({
-            stitch: s.stitch, label: s.label, outputDelta: s.outputDelta,
-            modifier: s.modifier || null, definition: s.definition,
-          });
+          const inner = expandInstructions(inst.instructions, custom, palette, ctx);
+          for (const s of inner) steps.push(s);
         }
       } else {
         if (inst.inMR) {
-          steps.push({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null, definition: null });
+          emit({ stitch: 'mr', label: SPECIALS.mr.labels[0], outputDelta: 0, modifier: null, definition: null });
         }
         for (let i = 0; i < inst.count; i++) {
-          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier, custom)) steps.push(s);
+          for (const s of makeStitchSteps(inst.stitch, inst.op, inst.modifier, custom)) emit(s);
         }
       }
     }
@@ -751,6 +794,7 @@
     clampCursor,
     resolveColour,
     collectPalette,
+    applyColourSwitch,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

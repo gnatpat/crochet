@@ -707,6 +707,55 @@
     eq(withComment.palette.brown, '#6b4a2e', 'trailing comment after hex is ignored');
   }
 
+  // ---- Colour threading + anchor ----
+  {
+    const { blocks, errors } = C.parsePattern(
+      ['color: cream', '1: 3 sc (3)', 'color: brown', '2: 3 sc (3)'].join('\n'));
+    eq(errors.length, 0, 'colour threading: no errors');
+    const r1 = blocks.find(b => b.type === 'row' && b.rowNumber === 1);
+    const r2 = blocks.find(b => b.type === 'row' && b.rowNumber === 2);
+    eq(r1.pressSteps[0].color.name, 'cream', 'R1 stitches cream');
+    eq(r2.pressSteps[0].color.name, 'brown', 'R2 stitches brown');
+    eq(r1.pressSteps[r1.pressSteps.length - 1].changeTo.name, 'brown', 'last of R1 anchors to brown');
+    assert(r2.pressSteps[r2.pressSteps.length - 1].changeTo == null, 'R2 last has no change');
+  }
+  {
+    // Trailing join/tch must NOT be the anchor.
+    const { blocks } = C.parsePattern(
+      ['color: cream', '1: 3 sc, join (3)', 'color: brown', '2: 3 sc (3)'].join('\n'));
+    const r1 = blocks.find(b => b.type === 'row' && b.rowNumber === 1);
+    const scSteps = r1.pressSteps.filter(s => s.stitch === 'sc');
+    eq(scSteps[scSteps.length - 1].changeTo.name, 'brown', 'anchor lands on last sc');
+    eq(r1.pressSteps.find(s => s.stitch === 'join').changeTo, undefined, 'join is not the anchor');
+  }
+  {
+    // Mid-round inline colour change.
+    const { blocks, errors } = C.parsePattern('color: yellow\n1: 2 sc, color: brown, 2 sc (4)');
+    eq(errors.length, 0, 'inline colour: no errors');
+    const r = blocks.find(b => b.type === 'row');
+    eq(r.pressSteps.length, 4, 'inline colour emits no press-step');
+    eq(r.expectedTotal, 4, 'inline colour does not affect the (N) total');
+    eq(r.pressSteps[0].color.name, 'yellow', 'pre-switch stitches yellow');
+    eq(r.pressSteps[1].changeTo.name, 'brown', '2nd stitch anchors to brown');
+    eq(r.pressSteps[2].color.name, 'brown', 'post-switch stitches brown');
+  }
+  {
+    // Piece boundary (section) resets the anchor — no change onto the prior piece.
+    const { blocks } = C.parsePattern(
+      ['color: brown', '[Head]', '1: 3 sc (3)', '[Ears]', 'color: yellow', '1: 3 sc (3)'].join('\n'));
+    const head1 = blocks.find(b => b.type === 'row' && b.section === 'Head');
+    assert(head1.pressSteps[head1.pressSteps.length - 1].changeTo == null, 'no cross-piece anchor');
+    const ears1 = blocks.find(b => b.type === 'row' && b.section === 'Ears');
+    eq(ears1.pressSteps[0].color.name, 'yellow', 'ears start yellow');
+  }
+  {
+    // Regression: no colour anywhere -> color null, no changeTo.
+    const { blocks } = C.parsePattern('1: 3 sc (3)');
+    const r = blocks.find(b => b.type === 'row');
+    assert(r.pressSteps[0].color == null, 'no colour -> color null');
+    assert(r.pressSteps[0].changeTo == null, 'no colour -> no changeTo');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;
