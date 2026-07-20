@@ -28,12 +28,38 @@
     'turn':  { presses: 1, outputDelta: [0], labels: ['↩ turn the work'] },
   };
 
+  // ---- Colour ----
+  // Small table of common yarn colour words -> a representative swatch hex.
+  // Used to draw the colour dot when the pattern doesn't pin an exact hex.
+  const COLOR_WORDS = {
+    white: '#f7f7f2', cream: '#f2e2c4', ivory: '#fffff0', beige: '#e8dcc4',
+    tan: '#d2b48c', buff: '#e8c99b', brown: '#6b4a2e', black: '#2b2b2b',
+    grey: '#9aa0a6', gray: '#9aa0a6', yellow: '#e5a50a', gold: '#d4af37',
+    orange: '#e8730c', red: '#c0392b', pink: '#e79ab0', rose: '#c76b7f',
+    purple: '#7d5ba6', blue: '#3a6ea5', green: '#3e8e5a', mint: '#9fd8b0',
+    teal: '#2a9d8f',
+  };
+
+  function isHex(s) { return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s); }
+
+  // name -> { name, hex }. Palette (pattern-declared) wins; then COLOR_WORDS;
+  // then hex:null (UI draws a neutral ring).
+  function resolveColour(name, palette) {
+    const key = String(name).toLowerCase();
+    const raw = palette && palette[key];
+    if (raw != null) {
+      if (isHex(raw)) return { name: key, hex: raw.toLowerCase() };
+      return { name: key, hex: COLOR_WORDS[String(raw).toLowerCase()] || null };
+    }
+    return { name: key, hex: COLOR_WORDS[key] || null };
+  }
+
   // Names a pattern may NOT use for a custom `def` — built-in tokens plus the
   // grammar words the parser reserves.
   const RESERVED_NAMES = new Set([
     ...HEIGHTS,
     'ch', 'tch', 'sl st', 'slst', 'join', 'mr', 'fo', 'turn',
-    'inc', 'dec', 'tog', 'in', 'blo', 'flo', 'x', 'def', 'note',
+    'inc', 'dec', 'tog', 'in', 'blo', 'flo', 'x', 'def', 'note', 'color',
   ]);
 
   function normalizeStitchName(s) {
@@ -228,6 +254,27 @@
       custom[def.name] = def;
     }
     return { custom, errors };
+  }
+
+  // Pre-pass: scan raw lines for palette declarations "color NAME = VALUE".
+  // Matched on RAW lines (not comment-stripped) because a #hex value would
+  // otherwise be eaten by the `#`-comment rule. A trailing `# comment` after
+  // the value is still tolerated by anchoring the value capture.
+  function collectPalette(lines) {
+    const palette = Object.create(null);
+    const errors = [];
+    const RE = /^\s*color\s+([a-z][a-z0-9]*)\s*=\s*(#[0-9a-f]{3}|#[0-9a-f]{6}|[a-z][a-z0-9]*)\s*(?:#.*)?$/i;
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(RE);
+      if (!m) continue;
+      const name = m[1].toLowerCase();
+      if (palette[name]) {
+        errors.push({ line: i + 1, message: 'Duplicate colour definition: "' + name + '"', raw: lines[i] });
+        continue;
+      }
+      palette[name] = m[2];
+    }
+    return { palette, errors };
   }
 
   function parseLine(line, custom = Object.create(null)) {
@@ -679,6 +726,7 @@
   const api = {
     HEIGHTS,
     SPECIALS,
+    COLOR_WORDS,
     parsePattern,
     parseLine,
     parseInstList,
@@ -701,6 +749,8 @@
     lastRowOfSection,
     normalizeCursor,
     clampCursor,
+    resolveColour,
+    collectPalette,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

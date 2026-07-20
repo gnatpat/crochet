@@ -688,6 +688,25 @@
     eq(errors.length >= 1, true, 'undefined token still errors');
   }
 
+  // ---- Colour palette + resolution ----
+  {
+    eq(C.resolveColour('brown', {}).hex, '#6b4a2e', 'brown derives a hex');
+    eq(C.resolveColour('BROWN', {}).name, 'brown', 'resolveColour lowercases name');
+    assert(C.resolveColour('chartreuse', {}).hex == null, 'unknown colour -> hex null');
+    eq(C.resolveColour('brown', { brown: '#123456' }).hex, '#123456', 'palette overrides derived shade');
+    eq(C.resolveColour('buff', { buff: 'tan' }).hex, C.resolveColour('tan', {}).hex, 'palette value can be a colour word');
+
+    const { palette, errors } = C.collectPalette(['color brown = #6b4a2e', '1: 6 sc (6)']);
+    eq(errors.length, 0, 'collectPalette: no errors on valid line');
+    eq(palette.brown, '#6b4a2e', 'collectPalette captures the hex value');
+
+    const dup = C.collectPalette(['color brown = #111', 'color brown = #222']);
+    assert(dup.errors.some(e => /duplicate/i.test(e.message)), 'duplicate palette line errors');
+
+    const withComment = C.collectPalette(['color brown = #6b4a2e  # main body']);
+    eq(withComment.palette.brown, '#6b4a2e', 'trailing comment after hex is ignored');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;
