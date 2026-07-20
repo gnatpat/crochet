@@ -756,6 +756,38 @@
     assert(r.pressSteps[0].changeTo == null, 'no colour -> no changeTo');
   }
 
+  // ---- Make N ----
+  {
+    const { blocks, errors } = C.parsePattern('[Ears] x2\n1: 3 sc (3)\n2: 3 sc (3)');
+    eq(errors.length, 0, 'make-N: no errors');
+    const secs = blocks.filter(b => b.type === 'section');
+    eq(secs.length, 2, 'x2 duplicates the section block');
+    eq(secs[0].copyIndex, 1, 'first copy index 1');
+    eq(secs[1].copyIndex, 2, 'second copy index 2');
+    eq(secs[0].copyTotal, 2, 'copyTotal 2');
+    const rows = blocks.filter(b => b.type === 'row');
+    eq(rows.length, 4, 'rows duplicated (2 rows x2)');
+    eq(rows[0].rowNumber, 1, 'copy1 starts at R1');
+    eq(rows[2].rowNumber, 1, 'copy2 restarts at R1');
+  }
+  {
+    const { blocks } = C.parsePattern('[Head]\n1: 3 sc (3)');
+    const secs = blocks.filter(b => b.type === 'section');
+    eq(secs.length, 1, 'no x -> single section');
+    assert(!(secs[0].copyTotal > 1), 'copyTotal not > 1 for plain section');
+  }
+  {
+    // Colour survives duplication; no spurious cross-copy anchor.
+    const { blocks } = C.parsePattern('[Leg] x2\ncolor: cream\n1: 2 sc (2)\ncolor: yellow\n2: 2 sc (2)');
+    const rows = blocks.filter(b => b.type === 'row');
+    eq(rows.length, 4, 'leg duplicated');
+    eq(rows[0].pressSteps[0].color.name, 'cream', 'copy1 R1 cream');
+    eq(rows[0].pressSteps[1].changeTo.name, 'yellow', 'copy1 anchor to yellow');
+    eq(rows[2].pressSteps[0].color.name, 'cream', 'copy2 R1 cream (cloned)');
+    eq(rows[2].pressSteps[1].changeTo.name, 'yellow', 'copy2 anchor preserved');
+    assert(rows[1].pressSteps[rows[1].pressSteps.length - 1].changeTo == null, 'no cross-copy anchor');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;

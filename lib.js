@@ -138,14 +138,16 @@
       let cm = stripped.match(/^color:\s*([a-z][a-z0-9]*)$/i);
       if (cm) { applyColourSwitch(colourCtx, cm[1], palette); i++; continue; }
 
-      // Section header: [NAME]
-      let m = stripped.match(/^\[(.+)\]$/);
+      // Section header: [NAME] or [NAME] x2
+      let m = stripped.match(/^\[(.+?)\]\s*(?:x\s*(\d+))?$/i);
       if (m) {
         currentSection = m[1].trim();
+        const repeat = m[2] ? parseInt(m[2], 10) : 1;
         const sectionBlock = {
           type: 'section',
           name: currentSection,
           section: currentSection,
+          repeat,
           intro: [],
           rawLine: raw,
           expectedTotal: 0,
@@ -238,11 +240,12 @@
       i++;
     }
 
+    const finalBlocks = expandRepeats(blocks);
     return {
-      blocks,
+      blocks: finalBlocks,
       errors,
       warnings,
-      rows: blocks.filter(b => b.type === 'row'),
+      rows: finalBlocks.filter(b => b.type === 'row'),
     };
   }
 
@@ -698,6 +701,41 @@
       if (b.type === 'row' && b.section === sectionName) last = b;
     }
     return last;
+  }
+
+  // Deep-enough clone of a block for a "make N" copy: fresh pressStep objects
+  // (so cursor indices are independent) with colour/changeTo refs preserved.
+  function cloneBlockWithCopy(block, copyIndex, copyTotal) {
+    const clone = Object.assign({}, block, {
+      copyIndex,
+      copyTotal,
+      pressSteps: block.pressSteps.map(s => Object.assign({}, s)),
+    });
+    if (block.intro) clone.intro = block.intro.slice();
+    return clone;
+  }
+
+  // Post-pass: for each section with repeat > 1, duplicate its run of blocks
+  // (the section block + all following blocks up to the next section) N times.
+  function expandRepeats(blocks) {
+    const out = [];
+    let i = 0;
+    while (i < blocks.length) {
+      const b = blocks[i];
+      if (b.type === 'section' && b.repeat && b.repeat > 1) {
+        const run = [b];
+        let j = i + 1;
+        while (j < blocks.length && blocks[j].type !== 'section') { run.push(blocks[j]); j++; }
+        for (let c = 1; c <= b.repeat; c++) {
+          for (const rb of run) out.push(cloneBlockWithCopy(rb, c, b.repeat));
+        }
+        i = j;
+      } else {
+        out.push(b);
+        i++;
+      }
+    }
+    return out;
   }
 
   // Clamp a cursor to valid positions for `parsed`, repairing anything out of
