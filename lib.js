@@ -715,6 +715,21 @@
     return clone;
   }
 
+  // The last anchor-eligible press-step across a run of blocks — the same step
+  // colour threading would have left as its anchor at the run's end.
+  function lastAnchorStep(blocks) {
+    for (let bi = blocks.length - 1; bi >= 0; bi--) {
+      const steps = blocks[bi].pressSteps || [];
+      for (let si = steps.length - 1; si >= 0; si--) {
+        const s = steps[si];
+        if (s.stitch === 'section' || s.stitch === 'note') continue;
+        if (ANCHOR_SKIP.has(s.stitch)) continue;
+        return s;
+      }
+    }
+    return null;
+  }
+
   // Post-pass: for each section with repeat > 1, duplicate its run of blocks
   // (the section block + all following blocks up to the next section) N times.
   function expandRepeats(blocks) {
@@ -727,7 +742,16 @@
         let j = i + 1;
         while (j < blocks.length && blocks[j].type !== 'section') { run.push(blocks[j]); j++; }
         for (let c = 1; c <= b.repeat; c++) {
-          for (const rb of run) out.push(cloneBlockWithCopy(rb, c, b.repeat));
+          const copyBlocks = run.map(rb => cloneBlockWithCopy(rb, c, b.repeat));
+          if (c < b.repeat) {
+            // A changeTo anchored on the run's trailing edge (set by a colour
+            // switch that comes AFTER the whole repeated section) belongs only
+            // to the final copy — clear it on every earlier copy. Interior
+            // (mid-run) changeTo anchors are untouched.
+            const anchor = lastAnchorStep(copyBlocks);
+            if (anchor && anchor.changeTo) delete anchor.changeTo;
+          }
+          for (const cb of copyBlocks) out.push(cb);
         }
         i = j;
       } else {

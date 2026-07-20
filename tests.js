@@ -787,6 +787,26 @@
     eq(rows[2].pressSteps[1].changeTo.name, 'yellow', 'copy2 anchor preserved');
     assert(rows[1].pressSteps[rows[1].pressSteps.length - 1].changeTo == null, 'no cross-copy anchor');
   }
+  {
+    // Colour switch immediately AFTER a repeated section anchors only on the last copy.
+    const { blocks } = C.parsePattern(
+      ['[Ears] x2', '1: 2 sc (2)', '2: 2 sc (2)', 'color: pink', '[Legs]', '1: 2 sc (2)'].join('\n'));
+    const earRows = blocks.filter(b => b.type === 'row' && b.section === 'Ears');
+    // earRows: copy1 R1, copy1 R2, copy2 R1, copy2 R2 (in order).
+    const copy1R2 = earRows[1], copy2R2 = earRows[3];
+    assert(copy1R2.pressSteps[copy1R2.pressSteps.length - 1].changeTo == null,
+      'copy 1 trailing stitch has NO cross-copy changeTo');
+    eq(copy2R2.pressSteps[copy2R2.pressSteps.length - 1].changeTo.name, 'pink',
+      'copy 2 trailing stitch keeps the changeTo to pink');
+  }
+  {
+    // Interior (mid-piece) colour change is preserved on ALL copies.
+    const { blocks } = C.parsePattern(
+      ['[Leg] x2', 'color: cream', '1: 2 sc (2)', 'color: yellow', '2: 2 sc (2)'].join('\n'));
+    const rows = blocks.filter(b => b.type === 'row');
+    eq(rows[0].pressSteps[1].changeTo.name, 'yellow', 'copy1 interior change preserved');
+    eq(rows[2].pressSteps[1].changeTo.name, 'yellow', 'copy2 interior change preserved');
+  }
 
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
