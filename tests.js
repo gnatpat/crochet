@@ -808,6 +808,30 @@
     eq(rows[2].pressSteps[1].changeTo.name, 'yellow', 'copy2 interior change preserved');
   }
 
+  // ---- sectionInstances (jump targets, copy-aware) ----
+  {
+    const parsed = C.parsePattern(['[Ears] x2', '1: 3 sc (3)', '2: 3 sc (3)', '[Tail]', '1: 3 sc (3)'].join('\n'));
+    const inst = C.sectionInstances(parsed);
+    eq(inst.length, 3, 'two Ears copies + one Tail = 3 instances');
+    eq(inst[0].name, 'Ears', 'inst 0 is Ears');
+    eq(inst[0].copyIndex + '/' + inst[0].copyTotal, '1/2', 'inst 0 is copy 1 of 2');
+    eq(inst[1].copyIndex + '/' + inst[1].copyTotal, '2/2', 'inst 1 is copy 2 of 2');
+    eq(inst[2].name, 'Tail', 'inst 2 is Tail');
+    eq(inst[0].rows.length, 2, 'each Ears copy has 2 rows');
+    // The row-2 block index of copy 2 must differ from copy 1 (distinct jump target).
+    const copy1r2 = inst[0].rows.find(r => r.rowNumber === 2);
+    const copy2r2 = inst[1].rows.find(r => r.rowNumber === 2);
+    assert(copy1r2.index !== copy2r2.index, 'copy 1 and copy 2 row 2 have distinct block indices');
+  }
+  {
+    // No sections at all -> a single nameless instance holding every row.
+    const parsed = C.parsePattern(['1: 3 sc (3)', '2: 3 sc (3)'].join('\n'));
+    const inst = C.sectionInstances(parsed);
+    eq(inst.length, 1, 'section-less pattern -> one instance');
+    eq(inst[0].name, null, 'nameless instance');
+    eq(inst[0].rows.length, 2, 'holds all rows');
+  }
+
   // ---- Converter-shaped DSL parses cleanly ----
   {
     const dsl = [

@@ -682,6 +682,36 @@
     return names;
   }
 
+  // Distinct jumpable section instances, in order. Unlike `sectionsOf` (which
+  // dedupes by name), each "make N" copy is its OWN instance, so a jump target
+  // can land on the 2nd ear specifically. Each instance carries the block index
+  // of its section header (or -1 for a leading section-less run), its
+  // copyIndex/copyTotal, and the row blocks that belong to it (with their block
+  // indices, so a jump can seek straight to a given row within THIS copy).
+  function sectionInstances(parsed) {
+    const out = [];
+    let cur = null;
+    parsed.blocks.forEach((b, i) => {
+      if (b.type === 'section') {
+        cur = {
+          headerIndex: i,
+          name: b.name,
+          copyIndex: b.copyIndex || 1,
+          copyTotal: b.copyTotal || 1,
+          rows: [],
+        };
+        out.push(cur);
+      } else if (b.type === 'row') {
+        if (!cur) {
+          cur = { headerIndex: -1, name: b.section != null ? b.section : null, copyIndex: 1, copyTotal: 1, rows: [] };
+          out.push(cur);
+        }
+        cur.rows.push({ block: b, index: i, rowNumber: b.rowNumber });
+      }
+    });
+    return out;
+  }
+
   // Section that the previous *row* belongs to, if any. Used for the
   // "Finished X · Next: Y" header on section blocks.
   function previousSectionName(parsed, blockIndex) {
@@ -854,6 +884,7 @@
     currentMode,
     rowsOf,
     sectionsOf,
+    sectionInstances,
     previousSectionName,
     lastRowOfSection,
     normalizeCursor,

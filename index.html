@@ -942,60 +942,71 @@
       const scrim = makeScrim();
       const close = () => document.body.removeChild(scrim);
 
-      const sections = C.sectionsOf(parsed);
-      // Find the current row + section for sensible defaults
-      let curBlock = parsed.blocks[project.cursor.blockIndex];
-      let curRow = curBlock && curBlock.type === 'row' ? curBlock :
-                   (function () {
-                     for (let i = project.cursor.blockIndex - 1; i >= 0; i--) {
-                       if (parsed.blocks[i] && parsed.blocks[i].type === 'row') return parsed.blocks[i];
-                     }
-                     return null;
-                   })();
-      const defaultSection = curRow && curRow.section != null ? curRow.section : sections[0];
-      const defaultRowNum = curRow ? curRow.rowNumber : '';
+      // Copy-aware jump targets: each "make N" copy is its own instance, so you
+      // can land on the 2nd ear specifically. Only instances that contain rows
+      // are jumpable (an assembly-only section has nothing to jump to).
+      const instances = C.sectionInstances(parsed).filter(inst => inst.rows.length);
+      if (!instances.length) { close(); return; }
 
-      function rowsInSection(sec) {
-        return parsed.blocks.filter(b => b.type === 'row' && (b.section || null) === (sec || null));
+      function instanceLabel(inst) {
+        if (inst.name == null) return 'Rows';
+        return inst.name + (inst.copyTotal > 1 ? ' (' + inst.copyIndex + ' of ' + inst.copyTotal + ')' : '');
       }
 
-      let sectionSelect = null;
-      let drawerContents = [];
+      // Default to the instance the cursor is currently in (headerIndex is
+      // monotonic, so the last one at/behind the cursor is the current piece).
+      const cursor = project.cursor;
+      let curInstIdx = 0;
+      instances.forEach((inst, k) => { if (inst.headerIndex <= cursor.blockIndex) curInstIdx = k; });
+      const curBlock = parsed.blocks[cursor.blockIndex];
+      const defaultRowNum = (curBlock && curBlock.type === 'row') ? curBlock.rowNumber
+        : instances[curInstIdx].rows[0].rowNumber;
 
-      if (sections.length > 1) {
+      const drawerContents = [];
+
+      // Piece picker — only when there's more than one instance to choose between.
+      let sectionSelect = null;
+      if (instances.length > 1) {
         sectionSelect = el('select');
-        for (const s of sections) {
+        instances.forEach((inst, k) => {
           const opt = document.createElement('option');
-          opt.value = s; opt.textContent = s;
-          if (s === defaultSection) opt.selected = true;
+          opt.value = String(k); opt.textContent = instanceLabel(inst);
+          if (k === curInstIdx) opt.selected = true;
           sectionSelect.appendChild(opt);
-        }
+        });
         sectionSelect.style.cssText = 'width:100%; padding:12px; border-radius:8px; border:1px solid var(--card-hi); background:var(--card); color:var(--fg); font: inherit;';
         drawerContents.push(el('div', { class: 'muted', style: 'font-size:13px' }, 'Section'), sectionSelect);
       }
 
-      const input = el('input', { type: 'text', placeholder: 'Row number', value: defaultRowNum });
-      function sectionRowsInfo() {
-        const sec = sectionSelect ? sectionSelect.value : (sections[0] || null);
-        const rows = rowsInSection(sec);
-        if (!rows.length) return '';
-        return 'Rows ' + rows[0].rowNumber + '–' + rows[rows.length - 1].rowNumber +
-               (sec ? ' in ' + sec : '');
+      function selectedInstance() {
+        const k = sectionSelect ? parseInt(sectionSelect.value, 10) : curInstIdx;
+        return instances[k] || instances[0];
       }
-      const hint = el('div', { class: 'muted', style: 'font-size:13px' }, sectionRowsInfo());
-      if (sectionSelect) sectionSelect.addEventListener('change', () => { hint.textContent = sectionRowsInfo(); });
+
+      const input = el('input', { type: 'number', placeholder: 'Row number', value: defaultRowNum });
+      const err = el('div', { style: 'font-size:13px; color: var(--warn); min-height:1.1em' });
+      function rangeHint() {
+        const rows = selectedInstance().rows;
+        return 'Rows ' + rows[0].rowNumber + '–' + rows[rows.length - 1].rowNumber;
+      }
+      const hint = el('div', { class: 'muted', style: 'font-size:13px' }, rangeHint());
+      if (sectionSelect) sectionSelect.addEventListener('change', () => {
+        hint.textContent = rangeHint();
+        err.textContent = '';
+        input.value = selectedInstance().rows[0].rowNumber;
+        input.focus();
+      });
 
       function go() {
-        const sec = sectionSelect ? sectionSelect.value : (sections[0] !== undefined ? sections[0] : null);
         const target = parseInt(input.value, 10);
-        if (isNaN(target)) { alert('Enter a row number.'); return; }
-        const idx = parsed.blocks.findIndex(b =>
-          b.type === 'row' && b.rowNumber === target && (b.section || null) === (sec || null));
-        if (idx < 0) {
-          alert('No row ' + target + (sec ? ' in section "' + sec + '"' : '') + '.');
+        if (isNaN(target)) { err.textContent = 'Enter a row number.'; return; }
+        const inst = selectedInstance();
+        const row = inst.rows.find(r => r.rowNumber === target);
+        if (!row) {
+          err.textContent = 'No row ' + target + ' in ' + instanceLabel(inst) + '.';
           return;
         }
-        project.cursor = C.jumpTo(project.cursor, idx, 0);
+        project.cursor = C.jumpTo(project.cursor, row.index, 0);
         saveProject(project);
         close();
         renderTracker(project.id);
@@ -1005,6 +1016,7 @@
         el('div', { class: 'muted', style: 'font-size:13px' }, 'Row number'),
         input,
         hint,
+        err,
         el('div', { class: 'row' },
           el('button', { class: 'btn secondary', onclick: close }, 'Cancel'),
           el('div', { style: 'flex:1' }),
@@ -1018,6 +1030,7 @@
       scrim.appendChild(drawer);
       document.body.appendChild(scrim);
       setTimeout(() => { input.focus(); input.select(); }, 0);
+      input.addEventListener('input', () => { err.textContent = ''; });
       input.addEventListener('keydown', e => { if (e.code === 'Enter') { e.preventDefault(); go(); } });
     }
     function editPattern(project) {
