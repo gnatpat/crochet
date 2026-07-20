@@ -808,6 +808,28 @@
     eq(rows[2].pressSteps[1].changeTo.name, 'yellow', 'copy2 interior change preserved');
   }
 
+  // ---- Converter-shaped DSL parses cleanly ----
+  {
+    const dsl = [
+      'color yellow = #e5a50a',
+      '[Head] x1',
+      'color: cream',
+      '1: 6 sc in MR (6)',
+      'color: yellow',
+      '2: 6 inc (12)',
+      '3: 4 sc, color: brown, 8 sc (12)',
+      '[Ears] x2',
+      '1: 6 sc in MR (6)',
+      '[Assembly]',
+      'note: Attach each ear to the mane.',
+    ].join('\n');
+    const { errors, warnings, blocks } = C.parsePattern(dsl);
+    eq(errors.length, 0, 'converter DSL: no errors');
+    eq(warnings.length, 0, 'converter DSL: no total warnings');
+    // Head has 3 rows; [Ears] x2 has 1 row duplicated to 2; total 5.
+    eq(blocks.filter(b => b.type === 'row').length, 5, 'Head 3 rows + Ears 1 row x2 = 5');
+  }
+
   // ---- Report ----
   const passed = results.filter(r => r.passed).length;
   const failed = results.length - passed;
