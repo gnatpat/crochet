@@ -289,22 +289,17 @@
     function loadLlmCfg() { return readJSON(LLM_KEY, {}); }
     function saveLlmCfg(c) { writeJSON(LLM_KEY, c); }
     const DEFAULT_LLM_MODEL = 'anthropic/claude-haiku-4.5';
+    const LLM_MAX_TOKENS = 32000;
 
-    async function llmConvert(rawText, key, model, thinking) {
+    async function llmConvert(rawText, key, model, thinking, onDelta) {
       const body = {
         model: model || DEFAULT_LLM_MODEL,
         messages: [{ role: 'user', content: CONVERT_PROMPT + rawText }],
         temperature: 0,
-        max_tokens: 4000,
+        max_tokens: LLM_MAX_TOKENS,
+        stream: true,
       };
-      // OpenRouter `reasoning` param: gives the model a scratchpad on supported
-      // models (Anthropic Claude, OpenAI o-series, etc.). The thinking lands in
-      // a separate channel so it doesn't pollute the DSL output we read from
-      // `content`. Defaults to "low" effort — small cost bump, useful quality
-      // gain on verbose pattern conversions.
-      if (thinking !== false) {
-        body.reasoning = { effort: 'low' };
-      }
+      if (thinking !== false) body.reasoning = { effort: 'low' };
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -321,15 +316,39 @@
         try { detail = JSON.parse(t).error?.message || t; } catch (e) {}
         throw new Error('OpenRouter ' + res.status + ': ' + (detail || res.statusText).slice(0, 240));
       }
-      const data = await res.json();
-      let out = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-      out = out.trim();
-      // Strip ``` fences if the model included them despite the instruction
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '', content = '', reasoning = '', finishReason = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep the (possibly partial) last line
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t.startsWith('data:')) continue; // skip blank lines and ": keep-alive" comments
+          const payload = t.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          let json;
+          try { json = JSON.parse(payload); } catch (e) { continue; }
+          const choice = json.choices && json.choices[0];
+          if (!choice) continue;
+          const delta = choice.delta || {};
+          if (delta.content) { content += delta.content; if (onDelta) onDelta({ content: delta.content, reasoning: '' }); }
+          if (delta.reasoning) { reasoning += delta.reasoning; if (onDelta) onDelta({ content: '', reasoning: delta.reasoning }); }
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+        }
+      }
+      if (finishReason === 'length') {
+        throw new Error('The model hit the output limit and the pattern was cut off. Try converting a shorter section, or pick a model with a larger output limit.');
+      }
+      let out = content.trim();
       if (out.startsWith('```')) {
-        const lines = out.split('\n');
-        if (lines[lines.length - 1].startsWith('```')) lines.pop();
-        lines.shift();
-        out = lines.join('\n').trim();
+        const outLines = out.split('\n');
+        if (outLines[outLines.length - 1].startsWith('```')) outLines.pop();
+        outLines.shift();
+        out = outLines.join('\n').trim();
       }
       return out;
     }
@@ -1125,7 +1144,7 @@
         convertBtn.disabled = true;
         status.textContent = (llm.thinking !== false) ? 'Converting (with thinking)…' : 'Converting…';
         try {
-          const out = await llmConvert(rawText, llm.key, llm.model, llm.thinking !== false);
+          const out = await llmConvert(rawText, llm.key, llm.model, llm.thinking !== false, null);
           targetTextarea.value = out;
           targetTextarea.dispatchEvent(new Event('input'));
           close();
