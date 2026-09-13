@@ -1,0 +1,46 @@
+# Deployment config for npd — https://github.com/gnatpat/npd
+#
+# Values were measured against the running server on 2026-09-13 rather than
+# copied from the old hand-written config.
+
+[app]
+name = "crochet"
+
+# No [build]: the frontend is plain static files (index.html, lib.js) at the
+# repo root, served by the FastAPI app itself from CROCHET_STATIC, which
+# defaults to the parent of server/.
+
+[service]
+workdir = "server"
+start = "uv run uvicorn server:app --host 127.0.0.1 --port $PORT"
+
+# Pinned to the port this app already uses, so migrating does not move it.
+port = 8152
+
+# server.py has a dedicated health endpoint returning {"ok": true}; better
+# than probing "/", which serves the whole index.html.
+health_path = "/api/health"
+
+[nginx]
+path = "/crochet/"
+
+# true (the default, stated because it is load-bearing): nginx strips
+# "/crochet" before the app sees the request. That is what this app needs —
+# every route in server.py is registered at the root ("/", "/api/sync",
+# "/{filename}"), and measured on the server the app answers 200 on "/" but
+# 307 on "/crochet/". This is the opposite of pokemon, which receives its own
+# prefix; do not copy one app's setting to the other.
+strip_prefix = true
+
+# No client_max_body_size: the old config did not set one either, so /api/sync
+# keeps nginx's 1m default. If a large collection ever starts failing to sync
+# with a 413, raise it here.
+
+[dev]
+# `npd dev --prefix` serves this under /crochet/ locally, reproducing nginx.
+start = "uv run uvicorn server:app --reload --host 127.0.0.1 --port $PORT"
+
+# No [env] and no [secrets]. CROCHET_DB defaults to "crochet.db", resolved
+# against the unit's working directory (server/), which is where the database
+# already lives. To move the data out of the clone later, set an absolute path
+# here — e.g. CROCHET_DB = "/home/nathan/app-data/crochet/crochet.db".
